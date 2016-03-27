@@ -1,5 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <module type="JAVA_MODULE" version="4">
+  <component name="FacetManager">
+    <facet type="Spring" name="Spring">
+      <configuration>
+        <fileset id="fileset" name="Spring Application Context" removed="false">
+          <file>file://$MODULE_DIR$/aws-java-sdk-1.10.64/samples/AwsFlowFramework/src/com/amazonaws/services/simpleworkflow/flow/examples/deployment/DeploymentTest-context.xml</file>
+          <file>file://$MODULE_DIR$/aws-java-sdk-1.10.64/samples/AwsFlowFramework/src/com/amazonaws/services/simpleworkflow/flow/examples/deployment/DeploymentInitiator-context.xml</file>
+          <file>file://$MODULE_DIR$/aws-java-sdk-1.10.64/samples/AwsFlowFramework/src/com/amazonaws/services/simpleworkflow/flow/examples/deployment/AppStack1.xml</file>
+          <file>file://$MODULE_DIR$/aws-java-sdk-1.10.64/samples/AwsFlowFramework/src/com/amazonaws/services/simpleworkflow/flow/examples/deployment/DeploymentHost-context.xml</file>
+          <file>file://$MODULE_DIR$/aws-java-sdk-1.10.64/samples/AwsFlowFramework/src/com/amazonaws/services/simpleworkflow/flow/examples/deployment/DeploymentCommon-context.xml</file>
+        </fileset>
+      </configuration>
+    </facet>
+  </component>
   <component name="NewModuleRootManager" inherit-compiler-output="true">
     <exclude-output />
     <content url="file://$MODULE_DIR$">
@@ -7,5 +20,18 @@
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
+    <orderEntry type="module-library">
+      <library>
+        <CLASSES>
+          <root url="file://$MODULE_DIR$/aws-java-sdk-1.10.64/lib" />
+        </CLASSES>
+        <JAVADOC />
+        <SOURCES>
+          <root url="file://$MODULE_DIR$/aws-java-sdk-1.10.64/lib" />
+        </SOURCES>
+        <jarDirectory url="file://$MODULE_DIR$/aws-java-sdk-1.10.64/lib" recursive="false" />
+        <jarDirectory url="file://$MODULE_DIR$/aws-java-sdk-1.10.64/lib" recursive="false" type="SOURCES" />
+      </library>
+    </orderEntry>
   </component>
 </module>
