@@ -4,7 +4,7 @@
 
 import java.io.*;
 import java.util.LinkedList;
-import java.util.UUID;
+//import java.util.UUID;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
@@ -32,7 +32,7 @@ import com.amazonaws.services.ec2.AmazonEC2Client;
 public class Local {
 
     private static final String bucket = "asafbendsp";
-    private static final String inputFileName = "/Users/asafchelouche/programming/tweet_mood/src/tweetLinks.txt";
+    private static final String inputFileName =  "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/short.txt";
     private static final String objectName = "tweetLinks.txt";
 
     public static void main(String[] args) throws IOException {

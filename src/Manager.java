@@ -2,7 +2,7 @@ import java.io.*;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Stack;
-import java.util.UUID;
+//import java.util.UUID;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
@@ -24,8 +24,9 @@ import org.jsoup.select.Elements;
 public class Manager {
 
     private static final String bucket = "asafbendsp";
-    private static final String inputFileName = "/Users/asafchelouche/programming/tweet_mood/src/tweetLinks.txt";
+    private static final String inputFileName = "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/short.txt";
     private static final String objectName = "tweetLinks.txt";
+
     FileReader fr;
     BufferedReader br;
     Stack<String> links;
@@ -59,8 +60,8 @@ public class Manager {
         } catch (IOException e) {
             e.printStackTrace();
         }
-        BufferedWriter br2 = null;
-        br2 = new BufferedWriter(fr2);
+        BufferedWriter bw2 = null;
+        bw2 = new BufferedWriter(fr2);
 
         for (String link : links) {
             try {
@@ -69,16 +70,21 @@ public class Manager {
                 e.printStackTrace();
             }
             content = doc.select("title");
+            //System.out.println(content.text());
             tweets.push(content.text());
             try {
-                br2.write(content.text() + "\n");
+                bw2.write(content.text());
+                bw2.write('\n');
             } catch (IOException e) {
                 e.printStackTrace();
             }
 //            System.out.println(content.text());
         }
+
         try {
+            bw2.flush();
             br.close();
+            bw2.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
