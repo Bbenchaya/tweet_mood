@@ -24,8 +24,8 @@ import org.jsoup.select.Elements;
 public class Manager {
 
     private static final String bucket = "asafbendsp";
-//    private static final String inputFileName = "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/short.txt";
-    private static final String inputFileName = "/Users/asafchelouche/programming/tweet_mood/src/short.txt";
+    private static final String inputFileName = "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/short.txt";
+//    private static final String inputFileName = "/Users/asafchelouche/programming/tweet_mood/src/short.txt";
     private static final String objectName = "tweetLinks.txt";
     private static double jobsPerWorker;
 

@@ -113,8 +113,9 @@ public class Worker {
                 String word = token.get(TextAnnotation.class);
                 // this is the NER label of the token
                 String ne = token.get(NamedEntityTagAnnotation.class);
-                if (ne != null)
-                    sb.append(ne + ",");
+                if (!ne.equals("O"))
+                    if(ne.equals("PERSON") || ne.equals("LOCATION") || ne.equals("ORGANIZATION"))
+                        sb.append(word + ":" + ne + ",");
             }
         }
         if (sb.length() > 1)

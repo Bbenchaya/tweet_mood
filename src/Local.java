@@ -10,8 +10,8 @@ import java.util.Scanner;
 public class Local {
 
     private static final String bucket = "asafbendsp";
-//    private static final String inputFileName =  "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/short.txt";
-    private static final String inputFileName = "/Users/asafchelouche/programming/tweet_mood/src/tweetLinks.txt";
+    private static final String inputFileName =  "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/tweetLinks.txt";
+//    private static final String inputFileName = "/Users/asafchelouche/programming/tweet_mood/src/tweetLinks.txt";
     private static final String objectName = "tweetLinks.txt";
 
     private static final String HEADER = "<html>\n\t<head>\n\t\t<title>DSP 162, assignment 1</title>\n\t</head>\n\t<body>";
@@ -66,7 +66,7 @@ public class Local {
             String fontColor = null;
             switch(sentiment) {
                 case "0":
-                    fontColor = "dark red";
+                    fontColor = "#610B0B"; //dark red
                     break;
                 case "1":
                     fontColor = "red";
@@ -75,10 +75,10 @@ public class Local {
                     fontColor = "black";
                     break;
                 case "3":
-                    fontColor = "light green";
+                    fontColor = "#40FF00"; //light green
                     break;
                 case "4":
-                    fontColor = "dark green";
+                    fontColor = "#0B3B0B"; //dark green
                     break;
             }
             fw.write("\n\t\t<p>");
