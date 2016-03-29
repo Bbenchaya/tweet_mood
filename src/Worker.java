@@ -25,7 +25,8 @@ import edu.stanford.nlp.util.CoreMap;
 
 public class Worker {
 
-    private Properties props;
+    private Properties sentimentProps;
+    private Properties entityProps;
     private StanfordCoreNLP  sentimentPipeline;
     private StanfordCoreNLP NERPipeline;
     private SQS jobs;
@@ -35,10 +36,12 @@ public class Worker {
     public Worker(SQS jobs, SQS results) {
         this.jobs = jobs;
         this.results = results;
-        Properties props = new Properties();
-        props.put("annotators", "tokenize, ssplit, parse, sentiment");
-        sentimentPipeline =  new StanfordCoreNLP(props);
-        NERPipeline =  new StanfordCoreNLP(props);
+        sentimentProps = new Properties();
+        entityProps = new Properties();
+        sentimentProps.put("annotators", "tokenize, ssplit, parse, sentiment");
+        entityProps.put("annotators", "tokenize , ssplit, pos, lemma, ner");
+        sentimentPipeline =  new StanfordCoreNLP(sentimentProps);
+        NERPipeline =  new StanfordCoreNLP(entityProps);
     }
 
 
