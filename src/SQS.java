@@ -16,12 +16,12 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 ///**
 // * Created by bbenchaya on 29/03/16.
 // */
-public class SQS {
+public class SQS<T> {
 
-    public Queue<String> jobs;
+    public Queue<T> queue;
 
     public SQS(){
-        jobs = new ConcurrentLinkedQueue<>();
+        queue = new ConcurrentLinkedQueue<T>();
     }
 //
 //    /**

@@ -2,7 +2,7 @@ import java.io.*;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Stack;
-//import java.util.UUID;
+import java.util.UUID;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
@@ -24,20 +24,38 @@ import org.jsoup.select.Elements;
 public class Manager {
 
     private static final String bucket = "asafbendsp";
-    private static final String inputFileName = "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/short.txt";
+//    private static final String inputFileName = "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/short.txt";
+    private static final String inputFileName = "/Users/asafchelouche/programming/tweet_mood/src/short.txt";
     private static final String objectName = "tweetLinks.txt";
+    private static double jobsPerWorker;
 
     FileReader fr;
     BufferedReader br;
     Stack<String> links;
     List<Worker> workers;
-    Stack<String> tweets;
+    SQS<String> jobs;
+    SQS<Result> results;
+    boolean done;
+
+    public Manager(SQS jobs, SQS results, int n) {
+        jobsPerWorker = n;
+        this.jobs = jobs;
+        this.results = results;
+        done = false;
+    }
+
+    boolean isDone() {
+        return done;
+    }
 
     public void start() {
-        File inputFile = new File(inputFileName);
+        //get the tweet links path, and obtain the file from S3
+        String job = jobs.queue.poll();
+
+        //download the tweets themselves and parse them
         FileReader fr = null;
         try {
-            fr = new FileReader(inputFile);
+            fr = new FileReader(job);
         } catch (FileNotFoundException e) {
             e.printStackTrace();
         }
@@ -50,19 +68,14 @@ public class Manager {
         } catch (IOException e) {
             e.printStackTrace();
         }
-        tweets = new Stack<>();
-        Document doc = null;
-        Elements content;
-        System.out.println("Parsing tweets");
-        FileWriter fr2 = null;
         try {
-            fr2 = new FileWriter("tweets.txt");
+            br.close();
         } catch (IOException e) {
             e.printStackTrace();
         }
-        BufferedWriter bw2 = null;
-        bw2 = new BufferedWriter(fr2);
-
+        Document doc = null;
+        Elements content;
+        System.out.print("Parsing tweets... ");
         for (String link : links) {
             try {
                 doc = Jsoup.connect(link).get();
@@ -70,27 +83,50 @@ public class Manager {
                 e.printStackTrace();
             }
             content = doc.select("title");
-            //System.out.println(content.text());
-            tweets.push(content.text());
-            try {
-                bw2.write(content.text());
-                bw2.write('\n');
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
+            jobs.queue.add(content.text());
 //            System.out.println(content.text());
         }
+        System.out.println("Done.");
 
+        //determine the number of workers to initiate
+        workers = new LinkedList<>();
+        int numOfWorkers = (int) Math.ceil(jobs.queue.size() / jobsPerWorker);
+        System.out.println("Creating workers and sending them to work...");
+        for (int i = 0; i < numOfWorkers; i++) {
+            Worker worker = new Worker(jobs, results);
+            workers.add(worker);
+            worker.work();
+        }
+
+        //gather and compile results
+        while (true) {
+            if (results.queue.size() < links.size())
+                continue;
+            break;
+        }
+
+        File file = new File("results.txt");
+        FileWriter fw = null;
         try {
-            bw2.flush();
-            br.close();
-            bw2.close();
+            fw = new FileWriter(file);
         } catch (IOException e) {
             e.printStackTrace();
         }
-        Worker worker = new Worker(tweets);
-        System.out.println("Working...");
-        worker.work();
+        for (Result result : results.queue) {
+            try {
+                fw.write(result.toString());
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        try {
+            fw.flush();
+            fw.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        jobs.queue.add("results.txt");
+        done = true;
     }
 
 

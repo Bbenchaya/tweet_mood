@@ -4,7 +4,7 @@
 
 import java.io.*;
 import java.util.LinkedList;
-//import java.util.UUID;
+import java.util.UUID;
 
 import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
@@ -29,17 +29,101 @@ import com.amazonaws.auth.PropertiesCredentials;
 import com.amazonaws.services.ec2.AmazonEC2;
 import com.amazonaws.services.ec2.AmazonEC2Client;
 
+import static javafx.application.Platform.exit;
+
 public class Local {
 
     private static final String bucket = "asafbendsp";
-    private static final String inputFileName =  "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/short.txt";
+//    private static final String inputFileName =  "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/short.txt";
+    private static final String inputFileName = "/Users/asafchelouche/programming/tweet_mood/src/short.txt";
     private static final String objectName = "tweetLinks.txt";
 
-    public static void main(String[] args) throws IOException {
+    private static final String HEADER =
+            "<html>" +
+                    "<head>" +
+                        "<title>bbc\\ac rock!!!</title>" +
+                    "</head>" +
+                    "<body>" +
+                    "";
 
-        Manager manager = new Manager();
+
+    private static final String FOOTER = "</body></html>";
+
+    public static void main(String[] args) throws IOException {
+        int n;
+//        if (args.length < 6 || args.length > 7) {
+//            System.out.println("Usage: java -jar <yourjar.jar> <inputFileName.txt> <outputFileName.html> <n> <terminate>");
+//            exit();
+//        }
+        n = 4;
+        Manager manager = null;
+
+        //upload the tweet links list to S3
+        File file = new File(inputFileName);
+
+        //add file link to jobs
+        SQS jobs = new SQS();
+        jobs.queue.add(inputFileName);
+
+        SQS results = new SQS();
+
+        //check if a Manager exists on EC2, if not initialize it
+        if (manager == null) {
+            manager = new Manager(jobs, results, n);
+        }
+
+        //download the list of tweets
         manager.start();
 
+
+        //check that the manager is done
+
+        String resultPath = (String) jobs.queue.poll();
+        File resultAsFile = new File(resultPath);
+        FileReader fr = new FileReader(resultAsFile);
+        BufferedReader br = new BufferedReader(fr);
+
+        File output = new File("output.html");
+        FileWriter fw = new FileWriter(output);
+        fw.write(HEADER);
+
+        //tokenize the results file and process each token one at a time
+        String[] brokenResults = resultsAsString.split("<delimiter>");
+        for (String result : brokenResults) {
+            String tweet = result.substring(result.indexOf("<tweet>") + 7, result.indexOf("</tweet>"));
+            String sentiment = result.substring(result.indexOf("<sentiment>") + 11, result.indexOf("</sentiment>"));
+            String entities = result.substring(result.indexOf("<entities>") + 10, result.indexOf("</entities>"));
+            String fontColor = null;
+            switch(sentiment) {
+                case "0":
+                    fontColor = "dark red";
+                    break;
+                case "1":
+                    fontColor = "red";
+                    break;
+                case "2":
+                    fontColor = "black";
+                    break;
+                case "3":
+                    fontColor = "light green";
+                    break;
+                case "4":
+                    fontColor = "dark green";
+                    break;
+            }
+            fw.write("<p>");
+            fw.write("<b><font color=\"" + fontColor + "\">");
+            fw.write(tweet);
+            fw.write("</font></b>");
+            fw.write(entities);
+            fw.write("</p>");
+            fw.flush();
+        }
+        fw.write(FOOTER);
+        fw.flush();
+        fw.close();
+        br.close();
+        fr.close();
 
 
 //        AmazonS3 s3 = new AmazonS3Client();
