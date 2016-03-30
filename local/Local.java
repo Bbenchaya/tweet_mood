@@ -75,7 +75,7 @@ public class Local {
     private static boolean managerShouldTerminate;
     private static String upstreamURL;
     private static String downstreamURL;
-    private static String URLS_FILENAME = "URLs.txt";
+    private static String URLS_FILENAME = "up-down.txt";
     private static AmazonSQS sqs;
 
 
@@ -140,7 +140,6 @@ public class Local {
         ec2.setRegion(usEast1);
         List<String> tagValues = new ArrayList<>();
         tagValues.add("manager");
-        tagValues.add("worker");
         Filter tagFilter = new Filter("tag:kind", tagValues);
         List<String> statusValues = new ArrayList<>();
         statusValues.add("running");
@@ -243,7 +242,7 @@ public class Local {
         File output = new File(System.getProperty("user.dir") + "/" + outputFileName);
         FileWriter fw = new FileWriter(output);
         fw.write(HEADER);
-        Scanner scanner = new Scanner(object.getObjectContent());
+        Scanner scanner = new Scanner(new InputStreamReader(object.getObjectContent()));
         scanner.useDelimiter("<delimiter>");
         //tokenize the reservations file and process each token one at a time
         while (scanner.hasNext()) {
