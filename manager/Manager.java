@@ -1,89 +1,50 @@
-import java.io.*;
-import java.util.*;
-
-import com.amazonaws.services.ec2.AmazonEC2;
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
-import org.jsoup.select.Elements;
-
-import java.io.*;
-import java.util.List;
-
-import static java.lang.Thread.sleep;
-import static javafx.application.Platform.exit;
-
-import java.io.BufferedReader;
-
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStreamWriter;
-import java.io.Writer;
-
 import com.amazonaws.AmazonClientException;
-import com.amazonaws.AmazonServiceException;
-import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.PropertiesCredentials;
-import com.amazonaws.regions.Region;
-import com.amazonaws.regions.Regions;
-import com.amazonaws.services.cognitosync.model.Platform;
-import com.amazonaws.services.ec2.model.*;
-import com.amazonaws.services.s3.AmazonS3;
-import com.amazonaws.services.s3.AmazonS3Client;
-import com.amazonaws.services.s3.model.GetObjectRequest;
-import com.amazonaws.services.s3.model.ListObjectsRequest;
-import com.amazonaws.services.s3.model.PutObjectRequest;
-import com.amazonaws.services.s3.model.Bucket;
-import com.amazonaws.services.s3.model.S3Object;
-import com.amazonaws.services.s3.model.ObjectListing;
-import com.amazonaws.services.s3.model.S3ObjectSummary;
-import com.amazonaws.AmazonClientException;
-import com.amazonaws.AmazonServiceException;
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.profile.ProfileCredentialsProvider;
 import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.ec2.AmazonEC2;
 import com.amazonaws.services.ec2.AmazonEC2Client;
-
-import java.util.List;
-import java.util.Map.Entry;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-import com.amazonaws.AmazonClientException;
-import com.amazonaws.AmazonServiceException;
-import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.profile.ProfileCredentialsProvider;
-import com.amazonaws.regions.Region;
-import com.amazonaws.regions.Regions;
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.model.GetObjectRequest;
+import com.amazonaws.services.s3.model.PutObjectRequest;
+import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClient;
 import com.amazonaws.services.sqs.model.*;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.select.Elements;
+
+import java.io.*;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Scanner;
+import java.util.Stack;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+// TODO extract the different code sections to methods
 
 public class Manager {
 
-    private static final String bucket = "asafbendsp";
-    private static final String inputFileName = "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/short.txt";
-//    private static final String inputFileName = "/Users/asafchelouche/programming/tweet_mood/src/short.txt";
-    private static final String objectName = "tweetLinks.txt";
     private static final String BUCKET_NAME = "asafbendsp";
     private static final String URLS_FILENAME = "up-down.txt";
     private static final String WORKER_QUEUES_FILENAME = "jobs-results.txt";
-    private static double jobsPerWorker;
+    // TODO handle this shit
+    private static int workersToFileRatio;
     private static String upstreamURL;
     private static String downstreamURL;
-    private static String jobs;
-    private static String results;
+    private static String jobsURL;
+    private static String resultsURL;
     private static List<Worker> workers;
     private static AtomicBoolean isAlive;
     private static AmazonEC2 ec2;
     private static AmazonS3 s3;
     private static AmazonSQS sqs;
     private static List<String> ids;
-    private static ConcurrentHashMap<String, Container> requests;
+    private static ConcurrentHashMap<String, RequestStatus> requests;
 
     private static boolean isAlive() {
         return isAlive.get();
@@ -91,7 +52,7 @@ public class Manager {
 
     public static void main(String[] args) throws IOException {
 
-        ids = new LinkedList<>();
+        ids = new LinkedList<>(); // TODO should we remove this?
         requests = new ConcurrentHashMap<>();
         isAlive.set(true);
 
@@ -112,21 +73,21 @@ public class Manager {
         }
 
         /*
-        Setup and run the thread that polls for completed request, and then compile the results for the DOWNSTREAM.
+        Setup and run the thread that polls for completed requests, and then compile the results and place in DOWNSTREAM
          */
-        Thread resultsPoller = new Thread() {
+        Thread compileResults = new Thread() {
             @Override
             public void run() {
                 while (Manager.isAlive()) {
-                    for (Container container : requests.values()) {
-                        if (container.hasAllResults()) {
-                            // TODO compile the results to UUIDresults.txt, save it to S3, and place its name in DOWNSTREAM
+                    for (RequestStatus requestStatus : requests.values()) {
+                        if (requestStatus.hasAllResults()) {
+                            // TODO compile the resultsURL to UUIDresults.txt, save it to S3, and place its name in DOWNSTREAM
                         }
                     }
                 }
             }
         };
-        resultsPoller.start();
+        compileResults.start();
 
         // initiate connection to EC2
         ec2 = new AmazonEC2Client(credentials);
@@ -143,20 +104,31 @@ public class Manager {
         BufferedReader br = new BufferedReader(new InputStreamReader(object.getObjectContent()));
         upstreamURL = br.readLine();
         downstreamURL = br.readLine();
+        workersToFileRatio = Integer.parseInt(br.readLine());
         br.close();
 
-        // create the SQSs to interface with the workers
+        // create the queues to interface with the workers
         System.out.print("Creating jobs queue...");
         CreateQueueRequest createJobsQueueRequest = new CreateQueueRequest("jobs");
-        jobs = sqs.createQueue(createJobsQueueRequest).getQueueUrl();
+        jobsURL = sqs.createQueue(createJobsQueueRequest).getQueueUrl();
         System.out.println("Done.");
         System.out.print("Creating results queue...");
         CreateQueueRequest createResultsQueueRequest = new CreateQueueRequest("results");
-        results = sqs.createQueue(createResultsQueueRequest).getQueueUrl();
+        resultsURL = sqs.createQueue(createResultsQueueRequest).getQueueUrl();
+        System.out.println("Done.");
+
+        // create a file that holds the queues' URLs, and upload it to S3 for the workers
+        File file = new File(System.getProperty("user.dir") + "/" + WORKER_QUEUES_FILENAME);
+        FileWriter fw = new FileWriter(file);
+        fw.write(jobsURL + "\n");
+        fw.write(resultsURL + "\n");
+        fw.close();
+        System.out.print("Uploading the URLs file to S3... ");
+        s3.putObject(new PutObjectRequest(BUCKET_NAME, WORKER_QUEUES_FILENAME, file));
         System.out.println("Done.");
 
         // create and run a thread that polls the UPSTREAM queue for work requests and the termination message
-        Thread workRequests = new Thread() {
+        Thread awaitRequests = new Thread() {
             @Override
             public void run() {
                 GetQueueAttributesRequest getQueueAttributesRequest = new GetQueueAttributesRequest(downstreamURL);
@@ -170,14 +142,17 @@ public class Manager {
                             e.printStackTrace();
                         }
                     }
+
+                    // TODO seret????
                     receiveMessageResult = sqs.receiveMessage(upstreamURL);
                     if (receiveMessageResult.toString().contains("links.txt")) {
                         List<Message> messages = receiveMessageResult.getMessages();
+                        // TODO check if necessary, maybe switch to messages.getMessages().get(0)
                         for (Message message : messages) {
                             if (message.toString().contains("links.txt")) {
                                 id = message.toString().substring(0, message.toString().indexOf("links.txt"));
-                                ids.add(id);
-                                requests.put(id, new Container());
+                                ids.add(id); // TODO remove?
+                                requests.put(id, new RequestStatus());
                                 String messageReceiptHandle = message.getReceiptHandle();
                                 sqs.deleteMessage(new DeleteMessageRequest(upstreamURL, messageReceiptHandle));
                                 break;
@@ -190,54 +165,56 @@ public class Manager {
                         System.out.println("Done.");
                         Scanner scanner = new Scanner(new InputStreamReader(object.getObjectContent()));
                         final String finalId = id;
-                        Thread getAndParse = new Thread() {
+                        Thread getAndParseTweetLinksFile = new Thread() {
                             @Override
                             public void run() {
+
                                 //download the tweets themselves and parse them
                                 Stack<String> links = new Stack<>();
-                                String line;
+                                String link;
                                 int numOfTweets = 0;
-                                while ((line = scanner.nextLine()) != null) {
-                                    links.push(line);
+                                while ((link = scanner.nextLine()) != null) {
+                                    links.push(link);
                                     numOfTweets++;
                                 }
                                 scanner.close();
                                 requests.get(finalId).setNumOfExpectedResults(numOfTweets);
+                                Document doc = null;
+                                Elements content;
+                                System.out.print("Parsing tweets... ");
+                                for (String link2 : links) {
+                                    try {
+                                        doc = Jsoup.connect(link2).get();
+                                    } catch (IOException e) {
+                                        e.printStackTrace();
+                                    }
+                                    content = doc.select("title");
+                                    sqs.sendMessage(jobsURL, "<id>" + finalId + "</id><content>" + content.text() + "</content>");
+                                }
+                                System.out.println("Done.");
 
-                                // TODO extract to Worker
-//                                Document doc = null;
-//                                Elements content;
-//                                System.out.print("Parsing tweets... ");
-//                                for (String link : links) {
-//                                    try {
-//                                        doc = Jsoup.connect(link).get();
-//                                    } catch (IOException e) {
-//                                        e.printStackTrace();
-//                                    }
-//                                    content = doc.select("title");
-//                                    // TODO
-//                                    sqs.sendMessage(jobs, ""content.text());
-//                                }
-//                                System.out.println("Done.");
-
-                                //determine the number of workers to initiate
+                                // TODO determine the number of workers to initiate
 //                                workers = new LinkedList<>();
-//                                int numOfWorkers = (int) Math.ceil(jobs.queue.size() / jobsPerWorker);
+//                                int numOfWorkers = (int) Math.ceil(jobsURL.queue.size() / jobsPerWorker);
 //                                System.out.println("Creating workers and sending them to work...");
 //                                for (int i = 0; i < numOfWorkers; i++) {
-//                                    Worker worker = new Worker(jobs, results);
+//                                    Worker worker = new Worker(jobsURL, resultsURL);
 //                                    workers.add(worker);
 //                                    worker.work();
 //                                }
                             }
                         };
-                        getAndParse.start();
-//                        break;
+                        getAndParseTweetLinksFile.start();
+//                        break; // TODO remove?
+                    }
+                    else {
+                        // TODO handle termination message
                     }
                 }
             }
         };
-        workRequests.start();
+        awaitRequests.start();
+
     }
 
 }

@@ -5,12 +5,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Created by asafchelouche on 30/3/16.
  */
-public class Container {
+public class RequestStatus {
 
     private int numOfExpectedResults;
     private List<String> results;
 
-    public Container() {
+    public RequestStatus() {
         numOfExpectedResults = -1;
         results = new LinkedList<>();
     }
