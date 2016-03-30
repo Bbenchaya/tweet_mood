@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Scanner;
 import java.util.UUID;
 
+import static java.lang.Thread.sleep;
 import static javafx.application.Platform.exit;
 
 import java.io.BufferedReader;
@@ -57,17 +58,13 @@ import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClient;
-import com.amazonaws.services.sqs.model.CreateQueueRequest;
-import com.amazonaws.services.sqs.model.DeleteMessageRequest;
-import com.amazonaws.services.sqs.model.DeleteQueueRequest;
-import com.amazonaws.services.sqs.model.Message;
-import com.amazonaws.services.sqs.model.ReceiveMessageRequest;
-import com.amazonaws.services.sqs.model.SendMessageRequest;
+import com.amazonaws.services.sqs.model.*;
 
 public class Local {
 
     private static final String BUCKET_NAME = "asafbendsp";
-//    private static final String inputFileName =  "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/tweetLinks.txt";
+    private static final String RESULTS_FILE_SUFFIX = "results.txt";
+    //    private static final String inputFileName =  "/Users/bbenchaya/Documents/Programming/DSP/tweet_mood/src/tweetLinks.txt";
     private static String inputFileName;
     private static String outputFileName;
     private static String objectName;
@@ -79,6 +76,7 @@ public class Local {
     private static String upstreamURL;
     private static String downstreamURL;
     private static String URLS_FILENAME = "URLs.txt";
+    private static AmazonSQS sqs;
 
 
     public static void main(String[] args) throws IOException {
@@ -161,7 +159,7 @@ public class Local {
         }
         else { // create the SQSs and start a manager instance
             // start 2 SQSs: upstream, downstream
-            AmazonSQS sqs = new AmazonSQSClient(credentials);
+            sqs = new AmazonSQSClient(credentials);
             sqs.setRegion(usEast1);
             try {
                 // Create the upstream and downstream queues
@@ -216,58 +214,73 @@ public class Local {
             }
 
         }
-        //download the list of tweets
-//        manager.start();
-
-
-        //check that the manager is done
-
-//        String resultPath = (String) jobs.queue.poll();
-//
-//        File output = new File(outputFileName);
-//        FileWriter fw = new FileWriter(output);
-//        fw.write(HEADER);
-//
-//
-//        Scanner scanner = new Scanner(new File(resultPath));
-//        scanner.useDelimiter("<delimiter>");
-//        //tokenize the reservations file and process each token one at a time
-//        while (scanner.hasNext()) {
-//            String result = scanner.next();
-//            String tweet = result.substring(result.indexOf("<tweet>") + 7, result.indexOf("</tweet>"));
-//            String sentiment = result.substring(result.indexOf("<sentiment>") + 11, result.indexOf("</sentiment>"));
-//            String entities = result.substring(result.indexOf("<entities>") + 10, result.indexOf("</entities>"));
-//            String fontColor = null;
-//            switch(sentiment) {
-//                case "0":
-//                    fontColor = "#610B0B"; //dark red
-//                    break;
-//                case "1":
-//                    fontColor = "red";
-//                    break;
-//                case "2":
-//                    fontColor = "black";
-//                    break;
-//                case "3":
-//                    fontColor = "#40FF00"; //light green
-//                    break;
-//                case "4":
-//                    fontColor = "#0B3B0B"; //dark green
-//                    break;
-//            }
-//            fw.write("\n\t\t<p>");
-//            fw.write("<b><font color=\"" + fontColor + "\">");
-//            fw.write(tweet);
-//            fw.write("</font></b>");
-//            fw.write(entities);
-//            fw.write("</p>");
-//            fw.flush();
-//        }
-//        fw.write(FOOTER);
-//        fw.flush();
-//        fw.close();
-//        scanner.close();
-
+        GetQueueAttributesRequest getQueueAttributesRequest = new GetQueueAttributesRequest(downstreamURL);
+        ReceiveMessageResult receiveMessageResult;
+        while (true) {
+            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().isEmpty()) {
+                try {
+                    sleep(1000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            receiveMessageResult = sqs.receiveMessage(downstreamURL);
+            if (receiveMessageResult.toString().contains(id)) {
+                List<Message> messages = receiveMessageResult.getMessages();
+                for (Message message : messages) {
+                    if (message.toString().contains(id)) {
+                        String messageReceiptHandle = message.getReceiptHandle();
+                        sqs.deleteMessage(new DeleteMessageRequest(downstreamURL, messageReceiptHandle));
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        System.out.print("Downloading results file from S3... ");
+        S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, id + RESULTS_FILE_SUFFIX));
+        System.out.println("Done.");
+        File output = new File(System.getProperty("user.dir") + "/" + outputFileName);
+        FileWriter fw = new FileWriter(output);
+        fw.write(HEADER);
+        Scanner scanner = new Scanner(object.getObjectContent());
+        scanner.useDelimiter("<delimiter>");
+        //tokenize the reservations file and process each token one at a time
+        while (scanner.hasNext()) {
+            String result = scanner.next();
+            String tweet = result.substring(result.indexOf("<tweet>") + 7, result.indexOf("</tweet>"));
+            String sentiment = result.substring(result.indexOf("<sentiment>") + 11, result.indexOf("</sentiment>"));
+            String entities = result.substring(result.indexOf("<entities>") + 10, result.indexOf("</entities>"));
+            String fontColor = null;
+            switch(sentiment) {
+                case "0":
+                    fontColor = "#610B0B"; //dark red
+                    break;
+                case "1":
+                    fontColor = "red";
+                    break;
+                case "2":
+                    fontColor = "black";
+                    break;
+                case "3":
+                    fontColor = "#40FF00"; //light green
+                    break;
+                case "4":
+                    fontColor = "#0B3B0B"; //dark green
+                    break;
+            }
+            fw.write("\n\t\t<p>");
+            fw.write("<b><font color=\"" + fontColor + "\">");
+            fw.write(tweet);
+            fw.write("</font></b>");
+            fw.write(entities);
+            fw.write("</p>");
+            fw.flush();
+        }
+        fw.write(FOOTER);
+        fw.flush();
+        fw.close();
+        scanner.close();
     }
 
     /**
