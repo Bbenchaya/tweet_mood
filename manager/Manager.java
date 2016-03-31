@@ -37,6 +37,7 @@ public class Manager {
     private static final String OUTPUT_FILENAME_SUFFIX = "output.txt";
     private static int workersPerTweetsRatio;
     private static AtomicInteger numOfActiveWorkers;
+    private static AtomicInteger pendingTweets;
     private static String upstreamURL;
     private static String downstreamURL;
     private static String jobsURL;
@@ -58,6 +59,7 @@ public class Manager {
         alive.set(true);
         shouldProcessRequests.set(true);
         numOfActiveWorkers.set(-1);
+        pendingTweets.set(0);
 
         // initiate connection to S3
         s3 = new AmazonS3Client();
@@ -177,6 +179,7 @@ public class Manager {
                                     }
                                     content = doc.select("title");
                                     sqs.sendMessage(jobsURL, "<id>" + finalId + "</id><content>" + content.text() + "</content>");
+                                    pendingTweets.addAndGet(1);
                                 }
                                 System.out.println("Done.");
                             }
@@ -226,6 +229,9 @@ public class Manager {
                         String id = body.substring(body.indexOf("<id>") + 4, body.indexOf("</id>"));
                         String result = body.substring(body.indexOf("<tweet>") + 7, body.length());
                         requests.get(id).addResult(result);
+                        pendingTweets.addAndGet(-1);
+                        String messageReceiptHandle = message.getReceiptHandle();
+                        sqs.deleteMessage(new DeleteMessageRequest(upstreamURL, messageReceiptHandle));
                     }
                     try {
                         sleep(500);
@@ -236,6 +242,8 @@ public class Manager {
             }
         };
         findAndHandleResults.start();
+
+        // TODO add a thread that checks if all workers are dead but no termination message was received, so start new Worker instances
 
         // wait for all Workers to DIE!!!
         List<String> tagValues = new ArrayList<>();
@@ -289,10 +297,12 @@ public class Manager {
             RunInstancesRequest request = new RunInstancesRequest("ami-b66ed3de", 1, 1);
             request.setInstanceType(InstanceType.T2Micro.toString());
             List<Instance> instances = ec2.runInstances(request).getReservation().getInstances();
+            request.setUserData(getUserDataScript());
             System.out.println("Launch instances: " + instances);
             CreateTagsRequest createTagRequest = new CreateTagsRequest();
             createTagRequest.withResources(instances.get(0).getInstanceId()).withTags(new Tag("kind", "worker"));
             ec2.createTags(createTagRequest);
+            // TODO the whole operation isn't atomic, change this
             if (numOfActiveWorkers.get() == -1)
                 numOfActiveWorkers.set(1);
             else
@@ -303,6 +313,21 @@ public class Manager {
             System.out.println("Error Code: " + ase.getErrorCode());
             System.out.println("Request ID: " + ase.getRequestId());
         }
+    }
+
+    private static String getUserDataScript(){
+        StringBuilder sb = new StringBuilder();
+        sb.append("#! /bin/bash\n");
+        sb.append("aws s3 cp s3://asafbendsp/ejml-0.23.jar ./ejml-0.23.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/jollyday-0.4.7.jar ./jollyday-0.4.7.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/jsoup-1.8.3.jar ./jsoup-1.8.3.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0-models.jar ./stanford-corenlp-3.3.0-models.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0.jar ./stanford-corenlp-3.3.0.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/MWorker.jar ./Worker.jar\n");
+        sb.append("java -cp .:Worker.jar:stanford-corenlp-3.3.0.jar:stanford-corenlp-3.3.0-models.jar:" +
+                "ejml-0.23.jar:jollyday-0.4.7.jar -jar Worker.jar\n");
+        String str = new String(org.apache.commons.codec.binary.Base64.encodeBase64(sb.toString().getBytes()));
+        return str;
     }
 
 }

@@ -19,12 +19,10 @@ import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClient;
 import com.amazonaws.services.sqs.model.*;
+import org.apache.commons.codec.binary.Base64;
 
 import java.io.*;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Scanner;
-import java.util.UUID;
+import java.util.*;
 
 import static java.lang.Thread.sleep;
 import static javafx.application.Platform.exit;
@@ -165,6 +163,7 @@ public class Local {
             try {
                 RunInstancesRequest request = new RunInstancesRequest("ami-b66ed3de", 1, 1);
                 request.setInstanceType(InstanceType.T2Micro.toString());
+                request.setUserData(getUserDataScript());
                 List<Instance> instances = ec2.runInstances(request).getReservation().getInstances();
                 System.out.println("Launch instances: " + instances);
                 CreateTagsRequest createTagRequest = new CreateTagsRequest();
@@ -257,6 +256,15 @@ public class Local {
         fw.flush();
         fw.close();
         scanner.close();
+    }
+
+    private static String getUserDataScript(){
+        StringBuilder sb = new StringBuilder();
+        sb.append("#! /bin/bash\n");
+        sb.append("aws s3 cp s3://asafbendsp/Manager.jar ./Manager.jar\n");
+        sb.append("java -jar Manager.jar\n");
+        String str = new String(Base64.encodeBase64(sb.toString().getBytes()));
+        return str;
     }
 
 }

@@ -13,6 +13,7 @@ import com.amazonaws.services.s3.model.GetObjectRequest;
 import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClient;
+import com.amazonaws.services.sqs.model.DeleteMessageRequest;
 import com.amazonaws.services.sqs.model.GetQueueAttributesRequest;
 import com.amazonaws.services.sqs.model.ReceiveMessageResult;
 import edu.stanford.nlp.ling.CoreAnnotations;
@@ -118,6 +119,9 @@ public class Worker {
 //                System.out.println("Entities: " + entities);
                 String result = resultAsString(id, tweet, sentiment, entities);
                 sqs.sendMessage(resultsURL, result);
+                // TODO get the message from jobs, and delete it
+//                String messageReceiptHandle = message.getReceiptHandle();
+//                sqs.deleteMessage(new DeleteMessageRequest(upstreamURL, messageReceiptHandle));
             }
         }
         System.out.println("Done.");
