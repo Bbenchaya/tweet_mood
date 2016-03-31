@@ -1,6 +1,5 @@
 import java.util.LinkedList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Created by asafchelouche on 30/3/16.
@@ -31,4 +30,13 @@ public class RequestStatus {
         results.add(result);
     }
 
+    public String getResults() {
+        StringBuilder sb = new StringBuilder();
+        for (String result : results) {
+            sb.append("<result>");
+            sb.append(result);
+            sb.append("</result>\n");
+        }
+        return sb.toString();
+    }
 }

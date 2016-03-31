@@ -104,7 +104,9 @@ public class Worker {
             if (receiveMessageResult.toString().contains("terminate")) {
                 // a termination message has been received, so break the loop and end execution of 'main'
                 System.out.print("Termination message received, exiting... ");
-                break;
+                Runtime rt = Runtime.getRuntime();
+                Process pr = rt.exec("shutdown -h now"); // sends a kill message to the EC2 instance
+                break; // if the EC2 instance is still running, this would cause the Worker to end execution
             } else {
                 // analyze the tweet, create the result message and place it in 'results' SQS
                 String job = receiveMessageResult.getMessages().get(0).getBody();
@@ -178,7 +180,6 @@ public class Worker {
 
     private static String resultAsString(String id, String tweet, int sentiment, String entities) {
         StringBuilder sb = new StringBuilder();
-        sb.append("<result>");
         sb.append("<id>");
         sb.append(id);
         sb.append("</id>");
@@ -191,7 +192,7 @@ public class Worker {
         sb.append("<entities>");
         sb.append(entities);
         sb.append("</entities>");
-        sb.append("</result><delimiter>");
+        sb.append("<delimiter>");
         return sb.toString();
     }
 

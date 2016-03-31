@@ -170,14 +170,22 @@ public class Local {
                 CreateTagsRequest createTagRequest = new CreateTagsRequest();
                 createTagRequest.withResources(instances.get(0).getInstanceId()).withTags(new Tag("kind", "manager"));
                 ec2.createTags(createTagRequest);
-                // TODO block the process until the Manager is running
             } catch (AmazonServiceException ase) {
                 System.out.println("Caught Exception: " + ase.getMessage());
                 System.out.println("Response Status Code: " + ase.getStatusCode());
                 System.out.println("Error Code: " + ase.getErrorCode());
                 System.out.println("Request ID: " + ase.getRequestId());
             }
+        }
 
+        // wait for the manager to run
+        DescribeInstancesRequest describeInstancesRequest = new DescribeInstancesRequest().withFilters(tagFilter, statusFilter);
+        while (ec2.describeInstances(describeInstancesRequest).getReservations().isEmpty()) {
+            try {
+                sleep(1000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
 
         // await for the results file, and compile it to HTML
@@ -192,10 +200,10 @@ public class Local {
                 }
             }
             receiveMessageResult = sqs.receiveMessage(downstreamURL);
-            if (receiveMessageResult.toString().contains(id)) {
+            if (receiveMessageResult.toString().contains(id + "done")) {
                 List<Message> messages = receiveMessageResult.getMessages();
                 for (Message message : messages) {
-                    if (message.toString().contains(id)) {
+                    if (message.toString().contains(id + "done")) {
                         String messageReceiptHandle = message.getReceiptHandle();
                         sqs.deleteMessage(new DeleteMessageRequest(downstreamURL, messageReceiptHandle));
                         break;
