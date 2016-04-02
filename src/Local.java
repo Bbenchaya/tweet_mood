@@ -22,7 +22,10 @@ import com.amazonaws.services.sqs.model.*;
 import org.apache.commons.codec.binary.Base64;
 
 import java.io.*;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
+import java.util.UUID;
 
 import static java.lang.Thread.sleep;
 import static javafx.application.Platform.exit;
@@ -37,7 +40,7 @@ public class Local {
     private static String outputFileName;
     private static String objectName;
     private static String id;
-    private static final String LINKS_FILENAME_SUFFIX = "links.txt";
+    private static final String LINKS_FILENAME_SUFFIX = "short.txt"; // TODO before deployment change to 'links.txt'
     private static final String HEADER = "<html>\n\t<head>\n\t\t<title>DSP 162, assignment 1</title>\n\t</head>\n\t<body>";
     private static final String FOOTER = "\n\t</body>\n</html>";
     private static boolean managerShouldTerminate;
@@ -69,7 +72,8 @@ public class Local {
         System.out.println("Local client running...");
         try {
             System.out.print("Uploading the tweet links file to S3... ");
-            File file = new File(System.getProperty("user.dir") + "/" + inputFileName);
+            // File file = new File(System.getProperty("user.dir") + "/" + inputFileName);
+            File file = new File(inputFileName);
             s3.putObject(new PutObjectRequest(BUCKET_NAME, objectName, file));
             System.out.println("Done.");
         } catch (AmazonServiceException ase) {
@@ -110,7 +114,7 @@ public class Local {
         List<Reservation> reservations = filteredInstances.getReservations();
         if (reservations.size() > 0) { // a Manager instance is already running
             // get the URLs file from S3
-            System.out.print("Downloading URLs file from S3... ");
+            System.out.print("Manager instance already running, downloading UPSTREAM\\DOWNSTREAM queues' URLs file from S3... ");
             S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, URLS_FILENAME));
             System.out.println("Done.");
             BufferedReader br = new BufferedReader(new InputStreamReader(object.getObjectContent()));
@@ -120,28 +124,30 @@ public class Local {
         }
         else { // create the SQSs and start a manager instance
 
+            System.out.println("No Manager instance currently running.");
             // start 2 SQSs: upstream, downstream
             sqs = new AmazonSQSClient(credentials);
             sqs.setRegion(usEast1);
             try {
                 // Create the upstream and downstream queues
-                System.out.print("Creating upstream queue...");
+                System.out.print("Creating upstream queue... ");
                 CreateQueueRequest createUpstreamQueueRequest = new CreateQueueRequest("upstream");
                 upstreamURL = sqs.createQueue(createUpstreamQueueRequest).getQueueUrl();
                 System.out.println("Done.");
-                System.out.print("Creating downstream queue...");
+                System.out.print("Creating downstream queue... ");
                 CreateQueueRequest createDownstreamQueueRequest = new CreateQueueRequest("downstream");
                 downstreamURL = sqs.createQueue(createDownstreamQueueRequest).getQueueUrl();
                 System.out.println("Done.");
 
                 // create a file that holds the queues' URLs, and upload it to S3 for the manager
-                File file = new File(System.getProperty("user.dir") + "/" + URLS_FILENAME);
+//                File file = new File(System.getProperty("user.dir") + "/" + URLS_FILENAME);
+                File file = new File(URLS_FILENAME);
                 FileWriter fw = new FileWriter(file);
                 fw.write(upstreamURL + "\n");
                 fw.write(downstreamURL + "\n");
                 fw.write(Integer.toString(workersToFileRatio) + "\n");
                 fw.close();
-                System.out.print("Uploading the URLs file to S3... ");
+                System.out.print("Uploading the UPSTREAM\\DOWNSTREAM queues' URLs file to S3... ");
                 s3.putObject(new PutObjectRequest(BUCKET_NAME, URLS_FILENAME, file));
                 System.out.println("Done.");
             } catch (AmazonServiceException ase) {
@@ -186,11 +192,13 @@ public class Local {
                 e.printStackTrace();
             }
         }
+        System.out.println("Manager instance running.");
 
         // await for the results file, and compile it to HTML
         GetQueueAttributesRequest getQueueAttributesRequest = new GetQueueAttributesRequest(downstreamURL);
         ReceiveMessageResult receiveMessageResult;
         while (true) {
+//            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().get("ApproximateNumberOfMessages").equals("0")) {
             while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().isEmpty()) {
                 try {
                     sleep(1000);
@@ -202,7 +210,7 @@ public class Local {
             if (receiveMessageResult.toString().contains(id + "done")) {
                 List<Message> messages = receiveMessageResult.getMessages();
                 for (Message message : messages) {
-                    if (message.toString().contains(id + "done")) {
+                    if (message.getBody().contains(id + "done")) {
                         String messageReceiptHandle = message.getReceiptHandle();
                         sqs.deleteMessage(new DeleteMessageRequest(downstreamURL, messageReceiptHandle));
                         break;
@@ -221,6 +229,7 @@ public class Local {
         scanner.useDelimiter("<delimiter>");
 
         //tokenize the reservations file and process each token one at a time
+        System.out.print("Compiling the results to HTML... ");
         while (scanner.hasNext()) {
             String result = scanner.next();
             String tweet = result.substring(result.indexOf("<tweet>") + 7, result.indexOf("</tweet>"));
@@ -256,6 +265,7 @@ public class Local {
         fw.flush();
         fw.close();
         scanner.close();
+        System.out.println("Done.");
     }
 
     private static String getUserDataScript(){
@@ -263,6 +273,7 @@ public class Local {
         sb.append("#! /bin/bash\n");
         sb.append("aws s3 cp s3://asafbendsp/Manager.jar ./Manager.jar\n");
         sb.append("java -jar Manager.jar\n");
+        // AWS requires that user data be encoded in base-64
         String str = new String(Base64.encodeBase64(sb.toString().getBytes()));
         return str;
     }

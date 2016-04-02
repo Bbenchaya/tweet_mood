@@ -15,6 +15,7 @@ import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClient;
 import com.amazonaws.services.sqs.model.*;
+import org.apache.commons.codec.binary.Base64;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.select.Elements;
@@ -56,9 +57,13 @@ public class Manager {
     public static void main(String[] args) throws IOException {
 
         requests = new ConcurrentHashMap<>();
+        alive = new AtomicBoolean();
         alive.set(true);
+        shouldProcessRequests = new AtomicBoolean();
         shouldProcessRequests.set(true);
+        numOfActiveWorkers = new AtomicInteger();
         numOfActiveWorkers.set(-1);
+        pendingTweets = new AtomicInteger();
         pendingTweets.set(0);
 
         // initiate connection to S3
@@ -111,7 +116,7 @@ public class Manager {
         fw.write(jobsURL + "\n");
         fw.write(resultsURL + "\n");
         fw.close();
-        System.out.print("Uploading the URLs file to S3... ");
+        System.out.print("Uploading the worker queues' URLs file to S3... ");
         s3.putObject(new PutObjectRequest(BUCKET_NAME, WORKER_QUEUES_FILENAME, file));
         System.out.println("Done.");
 
@@ -123,7 +128,7 @@ public class Manager {
                 ReceiveMessageResult receiveMessageResult;
                 while (Manager.shouldProcessRequests()) {
                     String id = null;
-                    while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().isEmpty()) {
+                    while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().get("ApproximateNumberOfMessages").equals("0")) {
                         try {
                             sleep(1000);
                         } catch (InterruptedException e) {
@@ -132,12 +137,13 @@ public class Manager {
                     }
 
                     receiveMessageResult = sqs.receiveMessage(upstreamURL);
-                    if (!receiveMessageResult.toString().contains("terminate")) {
+                    if (!receiveMessageResult.toString().contains("terminate")) { // there's no termination message in the UPSTREAM queue
                         List<Message> messages = receiveMessageResult.getMessages();
                         // TODO check if necessary, maybe switch to messages.getMessages().get(0)
                         for (Message message : messages) {
-                            if (message.toString().contains("links.txt")) {
-                                id = message.toString().substring(0, message.toString().indexOf("links.txt"));
+                            if (message.getBody().contains("links.txt")) {
+                                id = message.getBody().substring(0, message.getBody().indexOf("links.txt"));
+                                // create an entry that will hold the results of the request
                                 requests.put(id, new RequestStatus());
                                 String messageReceiptHandle = message.getReceiptHandle();
                                 sqs.deleteMessage(new DeleteMessageRequest(upstreamURL, messageReceiptHandle));
@@ -163,14 +169,16 @@ public class Manager {
                                     links.push(link);
                                     numOfTweets++;
                                     if (((double) numOfTweets) / workersPerTweetsRatio - numOfActiveWorkers.get() >= 0) {
+                                        // at this point, there's already in entry in 'requests' for the relevant request
                                         Manager.createWorker();
                                     }
                                 }
                                 scanner.close();
+                                // TODO synchronize?
                                 requests.get(finalId).setNumOfExpectedResults(numOfTweets);
                                 Document doc = null;
                                 Elements content;
-                                System.out.print("Parsing tweets... ");
+                                System.out.print("Parsing " + numOfTweets + " tweets... ");
                                 for (String link2 : links) {
                                     try {
                                         doc = Jsoup.connect(link2).get();
@@ -186,7 +194,7 @@ public class Manager {
                         };
                         getAndParseTweetLinksFile.start();
                     }
-                    else {
+                    else {  // termination message received in UPSTREAM queue
                         shouldProcessRequests.set(false);
                     }
                 }
@@ -201,6 +209,7 @@ public class Manager {
             @Override
             public void run() {
                 while (Manager.isAlive()) {
+                    // TODO synchronize?
                     Iterator<Map.Entry<String, RequestStatus>> it = requests.entrySet().iterator();
                     while (it.hasNext()) {
                         Map.Entry<String, RequestStatus> keyValue = it.next();
@@ -219,6 +228,7 @@ public class Manager {
         };
         compileResults.start();
 
+        // setup and run the thread that awaits and processes results
         Thread findAndHandleResults = new Thread() {
             @Override
             public void run() {
@@ -227,11 +237,13 @@ public class Manager {
                     for (Message message : receiveMessageResult.getMessages()) {
                         String body = message.getBody();
                         String id = body.substring(body.indexOf("<id>") + 4, body.indexOf("</id>"));
-                        String result = body.substring(body.indexOf("<tweet>") + 7, body.length());
+                        String result = body.substring(body.indexOf("<tweet>"), body.length());
+                        // TODO synchronize?
                         requests.get(id).addResult(result);
                         pendingTweets.addAndGet(-1);
                         String messageReceiptHandle = message.getReceiptHandle();
                         sqs.deleteMessage(new DeleteMessageRequest(upstreamURL, messageReceiptHandle));
+                        System.out.println("Processed result: id: " + id + " result: " + result);
                     }
                     try {
                         sleep(500);
@@ -255,6 +267,7 @@ public class Manager {
         while (true) {
             DescribeInstancesResult filteredInstances = ec2.describeInstances(new DescribeInstancesRequest().withFilters(tagFilter, statusFilter));
             List<Reservation> reservations = filteredInstances.getReservations();
+            // if there are no running workers, break and finish execution
             if (reservations.size() == 0 && numOfActiveWorkers.get() >= 0)
                 break;
             else
@@ -296,17 +309,19 @@ public class Manager {
         try {
             RunInstancesRequest request = new RunInstancesRequest("ami-b66ed3de", 1, 1);
             request.setInstanceType(InstanceType.T2Micro.toString());
-            List<Instance> instances = ec2.runInstances(request).getReservation().getInstances();
             request.setUserData(getUserDataScript());
+            List<Instance> instances = ec2.runInstances(request).getReservation().getInstances();
             System.out.println("Launch instances: " + instances);
             CreateTagsRequest createTagRequest = new CreateTagsRequest();
             createTagRequest.withResources(instances.get(0).getInstanceId()).withTags(new Tag("kind", "worker"));
             ec2.createTags(createTagRequest);
-            // TODO the whole operation isn't atomic, change this
-            if (numOfActiveWorkers.get() == -1)
-                numOfActiveWorkers.set(1);
-            else
-                numOfActiveWorkers.addAndGet(1);
+            // the synchronization looks redundant, but using atomics makes the code easier in 2 other places
+            synchronized (numOfActiveWorkers) {
+                if (numOfActiveWorkers.get() == -1)
+                    numOfActiveWorkers.set(1);
+                else
+                    numOfActiveWorkers.addAndGet(1);
+            }
         } catch (AmazonServiceException ase) {
             System.out.println("Caught Exception: " + ase.getMessage());
             System.out.println("Response Status Code: " + ase.getStatusCode());
@@ -323,10 +338,11 @@ public class Manager {
         sb.append("aws s3 cp s3://asafbendsp/jsoup-1.8.3.jar ./jsoup-1.8.3.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0-models.jar ./stanford-corenlp-3.3.0-models.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0.jar ./stanford-corenlp-3.3.0.jar\n");
-        sb.append("aws s3 cp s3://asafbendsp/MWorker.jar ./Worker.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/Worker.jar ./Worker.jar\n");
         sb.append("java -cp .:Worker.jar:stanford-corenlp-3.3.0.jar:stanford-corenlp-3.3.0-models.jar:" +
                 "ejml-0.23.jar:jollyday-0.4.7.jar -jar Worker.jar\n");
-        String str = new String(org.apache.commons.codec.binary.Base64.encodeBase64(sb.toString().getBytes()));
+        // AWS requires that user data be encoded in base-64
+        String str = new String(Base64.encodeBase64(sb.toString().getBytes()));
         return str;
     }
 

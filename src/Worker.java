@@ -15,6 +15,7 @@ import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClient;
 import com.amazonaws.services.sqs.model.DeleteMessageRequest;
 import com.amazonaws.services.sqs.model.GetQueueAttributesRequest;
+import com.amazonaws.services.sqs.model.Message;
 import com.amazonaws.services.sqs.model.ReceiveMessageResult;
 import edu.stanford.nlp.ling.CoreAnnotations;
 import edu.stanford.nlp.ling.CoreAnnotations.NamedEntityTagAnnotation;
@@ -94,7 +95,7 @@ public class Worker {
         GetQueueAttributesRequest getQueueAttributesRequest = new GetQueueAttributesRequest(jobsURL);
         ReceiveMessageResult receiveMessageResult;
         while (true) {
-            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().isEmpty()) {
+            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().get("ApproximateNumberOfMessages").equals("0")) {
                 try {
                     sleep(1000);
                 } catch (InterruptedException e) {
@@ -102,28 +103,31 @@ public class Worker {
                 }
             }
             receiveMessageResult = sqs.receiveMessage(jobsURL);
-            if (receiveMessageResult.toString().contains("terminate")) {
-                // a termination message has been received, so break the loop and end execution of 'main'
+            List<Message> messages = receiveMessageResult.getMessages();
+            // all incoming jobs have been processed, and the last 'job' is a termination message
+            if (messages.size() == 1 && messages.get(0).getBody().contains("terminate")) {
                 System.out.print("Termination message received, exiting... ");
+                // TODO send statistics in the results queue
                 Runtime rt = Runtime.getRuntime();
                 Process pr = rt.exec("shutdown -h now"); // sends a kill message to the EC2 instance
                 break; // if the EC2 instance is still running, this would cause the Worker to end execution
-            } else {
-                // analyze the tweet, create the result message and place it in 'results' SQS
-                String job = receiveMessageResult.getMessages().get(0).getBody();
-                String id = job.substring(4, job.indexOf("</id>"));
-                String tweet = job.substring(job.indexOf("<tweet>" + 7), job.indexOf("</tweet>"));
-                int sentiment = findSentiment(tweet);
-//                System.out.println("Sentiment: " + sentiment);
-                String entities = extractEntities(tweet);
-//                System.out.println("Entities: " + entities);
-                String result = resultAsString(id, tweet, sentiment, entities);
-                sqs.sendMessage(resultsURL, result);
-                // TODO get the message from jobs, and delete it
-//                String messageReceiptHandle = message.getReceiptHandle();
-//                sqs.deleteMessage(new DeleteMessageRequest(upstreamURL, messageReceiptHandle));
             }
-        }
+            for (Message message : messages) {
+                    // analyze the tweet, create the result message and place it in 'results' SQS
+                    String job = message.getBody();
+                    String id = job.substring(4, job.indexOf("</id>"));
+                    String tweet = job.substring(job.indexOf("<tweet>" + 7), job.indexOf("</tweet>"));
+                    int sentiment = findSentiment(tweet);
+//                System.out.println("Sentiment: " + sentiment);
+                    String entities = extractEntities(tweet);
+//                System.out.println("Entities: " + entities);
+                    String result = resultAsString(id, tweet, sentiment, entities);
+                    sqs.sendMessage(resultsURL, result);
+                    // TODO get the message from jobs, and delete it
+                    String messageReceiptHandle = message.getReceiptHandle();
+                    sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
+                }
+            }
         System.out.println("Done.");
     }
 
