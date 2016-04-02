@@ -1,7 +1,4 @@
-import com.amazonaws.AmazonClientException;
 import com.amazonaws.AmazonServiceException;
-import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.profile.ProfileCredentialsProvider;
 import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.ec2.AmazonEC2;
@@ -56,39 +53,7 @@ public class Manager {
 
     public static void main(String[] args) throws IOException {
 
-        requests = new ConcurrentHashMap<>();
-        alive = new AtomicBoolean();
-        alive.set(true);
-        shouldProcessRequests = new AtomicBoolean();
-        shouldProcessRequests.set(true);
-        numOfActiveWorkers = new AtomicInteger();
-        numOfActiveWorkers.set(-1);
-        pendingTweets = new AtomicInteger();
-        pendingTweets.set(0);
-
-        // initiate connection to S3
-        s3 = new AmazonS3Client();
-        Region usEast1 = Region.getRegion(Regions.US_EAST_1);
-        s3.setRegion(usEast1);
-        System.out.println("Manager running...");
-        AWSCredentials credentials = null;
-        try {
-            credentials = new ProfileCredentialsProvider().getCredentials();
-        } catch (Exception e) {
-            throw new AmazonClientException(
-                    "Cannot load the credentials from the credential profiles file. " +
-                            "Please make sure that your credentials file is at the correct " +
-                            "location (~/.aws/credentials), and is in valid format.",
-                    e);
-        }
-
-        // initiate connection to EC2
-        ec2 = new AmazonEC2Client(credentials);
-        ec2.setRegion(usEast1);
-
-        // initiate connection to SQS
-        sqs = new AmazonSQSClient(credentials);
-        sqs.setRegion(usEast1);
+        init();
 
         // get the  SQS URLs file from S3
         System.out.print("Downloading URLs file from S3... ");
@@ -124,18 +89,22 @@ public class Manager {
         Thread awaitAndProcessRequests = new Thread() {
             @Override
             public void run() {
-                GetQueueAttributesRequest getQueueAttributesRequest = new GetQueueAttributesRequest(downstreamURL);
+                GetQueueAttributesRequest getQueueAttributesRequest = new GetQueueAttributesRequest(upstreamURL);
+                List<String> attributeNames = new LinkedList<>();
+                attributeNames.add("ApproximateNumberOfMessages");
+                getQueueAttributesRequest.setAttributeNames(attributeNames);
                 ReceiveMessageResult receiveMessageResult;
+                System.out.println("Awaiting incoming requests...");
                 while (Manager.shouldProcessRequests()) {
                     String id = null;
-                    while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().get("ApproximateNumberOfMessages").equals("0")) {
+                    while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().isEmpty()) {
                         try {
                             sleep(1000);
                         } catch (InterruptedException e) {
                             e.printStackTrace();
                         }
                     }
-
+                    System.out.println("Receiving incoming request at UPSTREAM...");
                     receiveMessageResult = sqs.receiveMessage(upstreamURL);
                     if (!receiveMessageResult.toString().contains("terminate")) { // there's no termination message in the UPSTREAM queue
                         List<Message> messages = receiveMessageResult.getMessages();
@@ -160,7 +129,7 @@ public class Manager {
                         Thread getAndParseTweetLinksFile = new Thread() {
                             @Override
                             public void run() {
-
+                                System.out.println("Handling the request...");
                                 //download the tweets themselves and parse them
                                 Stack<String> links = new Stack<>();
                                 String link;
@@ -169,6 +138,7 @@ public class Manager {
                                     links.push(link);
                                     numOfTweets++;
                                     if (((double) numOfTweets) / workersPerTweetsRatio - numOfActiveWorkers.get() >= 0) {
+                                        System.out.println("Creating new worker. Number of pending tweets: " + pendingTweets.get());
                                         // at this point, there's already in entry in 'requests' for the relevant request
                                         Manager.createWorker();
                                     }
@@ -214,6 +184,7 @@ public class Manager {
                     while (it.hasNext()) {
                         Map.Entry<String, RequestStatus> keyValue = it.next();
                         if (keyValue.getValue().hasAllResults()) {
+                            System.out.println("Compiling results");
                             Manager.compileAndSendResults(keyValue.getKey(), keyValue.getValue().getResults());
                             requests.remove(keyValue.getKey());
                         }
@@ -282,6 +253,32 @@ public class Manager {
 
     }
 
+    private static void init() {
+        requests = new ConcurrentHashMap<>();
+        alive = new AtomicBoolean();
+        alive.set(true);
+        shouldProcessRequests = new AtomicBoolean();
+        shouldProcessRequests.set(true);
+        numOfActiveWorkers = new AtomicInteger();
+        numOfActiveWorkers.set(-1);
+        pendingTweets = new AtomicInteger();
+        pendingTweets.set(0);
+
+        // initiate connection to S3
+        s3 = new AmazonS3Client();
+        Region usEast1 = Region.getRegion(Regions.US_EAST_1);
+        s3.setRegion(usEast1);
+        System.out.println("Manager running...");
+
+        // initiate connection to EC2
+        ec2 = new AmazonEC2Client();
+        ec2.setRegion(usEast1);
+
+        // initiate connection to SQS
+        sqs = new AmazonSQSClient();
+        sqs.setRegion(usEast1);
+    }
+
     private static boolean shouldProcessRequests() {
         return shouldProcessRequests.get();
     }
@@ -307,9 +304,12 @@ public class Manager {
     private static void createWorker() {
         // start a Worker instance
         try {
-            RunInstancesRequest request = new RunInstancesRequest("ami-b66ed3de", 1, 1);
+            RunInstancesRequest request = new RunInstancesRequest("ami-4504112f", 1, 1); // base AMI: b66ed3de
             request.setInstanceType(InstanceType.T2Micro.toString());
             request.setUserData(getUserDataScript());
+            IamInstanceProfileSpecification iamInstanceProfileSpecification = new IamInstanceProfileSpecification();
+            iamInstanceProfileSpecification.setName("creds");
+            request.setIamInstanceProfile(iamInstanceProfileSpecification);
             List<Instance> instances = ec2.runInstances(request).getReservation().getInstances();
             System.out.println("Launch instances: " + instances);
             CreateTagsRequest createTagRequest = new CreateTagsRequest();
@@ -333,14 +333,15 @@ public class Manager {
     private static String getUserDataScript(){
         StringBuilder sb = new StringBuilder();
         sb.append("#! /bin/bash\n");
-        sb.append("aws s3 cp s3://asafbendsp/ejml-0.23.jar ./ejml-0.23.jar\n");
-        sb.append("aws s3 cp s3://asafbendsp/jollyday-0.4.7.jar ./jollyday-0.4.7.jar\n");
-        sb.append("aws s3 cp s3://asafbendsp/jsoup-1.8.3.jar ./jsoup-1.8.3.jar\n");
-        sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0-models.jar ./stanford-corenlp-3.3.0-models.jar\n");
-        sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0.jar ./stanford-corenlp-3.3.0.jar\n");
-        sb.append("aws s3 cp s3://asafbendsp/Worker.jar ./Worker.jar\n");
-        sb.append("java -cp .:Worker.jar:stanford-corenlp-3.3.0.jar:stanford-corenlp-3.3.0-models.jar:" +
-                "ejml-0.23.jar:jollyday-0.4.7.jar -jar Worker.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/ejml-0.23.jar ejml-0.23.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/jollyday-0.4.7.jar jollyday-0.4.7.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0-models.jar stanford-corenlp-3.3.0-models.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0.jar stanford-corenlp-3.3.0.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/Worker.jar Worker.jar\n");
+        sb.append("wget --no-check-certificate --no-cookies --header \"Cookie: oraclelicense=accept-securebackup-cookie\" http://download.oracle.com/otn-pub/java/jdk/8u73-b02/jdk-8u73-linux-x64.rpm\n");
+        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm");
+        sb.append("jar xf Worker.jar\n");
+        sb.append("java -cp .:./* Worker\n");
         // AWS requires that user data be encoded in base-64
         String str = new String(Base64.encodeBase64(sb.toString().getBytes()));
         return str;

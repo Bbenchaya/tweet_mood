@@ -2,9 +2,6 @@
  * Created by asafchelouche on 27/3/16.
  */
 
-import com.amazonaws.AmazonClientException;
-import com.amazonaws.auth.AWSCredentials;
-import com.amazonaws.auth.profile.ProfileCredentialsProvider;
 import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
@@ -67,19 +64,19 @@ public class Worker {
         Region usEast1 = Region.getRegion(Regions.US_EAST_1);
         s3.setRegion(usEast1);
         System.out.println("Manager running...");
-        AWSCredentials credentials = null;
-        try {
-            credentials = new ProfileCredentialsProvider().getCredentials();
-        } catch (Exception e) {
-            throw new AmazonClientException(
-                    "Cannot load the credentials from the credential profiles file. " +
-                            "Please make sure that your credentials file is at the correct " +
-                            "location (~/.aws/credentials), and is in valid format.",
-                    e);
-        }
+//        AWSCredentials credentials = null;
+//        try {
+//            credentials = new ProfileCredentialsProvider().getCredentials();
+//        } catch (Exception e) {
+//            throw new AmazonClientException(
+//                    "Cannot load the credentials from the credential profiles file. " +
+//                            "Please make sure that your credentials file is at the correct " +
+//                            "location (~/.aws/credentials), and is in valid format.",
+//                    e);
+//        }
 
         // initiate connection to SQS
-        sqs = new AmazonSQSClient(credentials);
+        sqs = new AmazonSQSClient();
         sqs.setRegion(usEast1);
 
         // get the  SQS URLs file from S3
@@ -95,8 +92,10 @@ public class Worker {
         GetQueueAttributesRequest getQueueAttributesRequest = new GetQueueAttributesRequest(jobsURL);
         ReceiveMessageResult receiveMessageResult;
         while (true) {
-            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().get("ApproximateNumberOfMessages").equals("0")) {
-                try {
+//            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().get("ApproximateNumberOfMessages").equals("0")) {
+            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().isEmpty()) {
+
+                    try {
                     sleep(1000);
                 } catch (InterruptedException e) {
                     e.printStackTrace();

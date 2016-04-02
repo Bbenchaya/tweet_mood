@@ -22,10 +22,7 @@ import com.amazonaws.services.sqs.model.*;
 import org.apache.commons.codec.binary.Base64;
 
 import java.io.*;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Scanner;
-import java.util.UUID;
+import java.util.*;
 
 import static java.lang.Thread.sleep;
 import static javafx.application.Platform.exit;
@@ -40,13 +37,14 @@ public class Local {
     private static String outputFileName;
     private static String objectName;
     private static String id;
-    private static final String LINKS_FILENAME_SUFFIX = "short.txt"; // TODO before deployment change to 'links.txt'
+    private static final String LINKS_FILENAME_SUFFIX = "links.txt"; // TODO before deployment change to 'links.txt'
     private static final String HEADER = "<html>\n\t<head>\n\t\t<title>DSP 162, assignment 1</title>\n\t</head>\n\t<body>";
     private static final String FOOTER = "\n\t</body>\n</html>";
     private static boolean managerShouldTerminate;
     private static String upstreamURL;
     private static String downstreamURL;
     private static final String URLS_FILENAME = "up-down.txt";
+    private static AmazonS3 s3;
     private static AmazonSQS sqs;
 
 
@@ -66,14 +64,14 @@ public class Local {
 //        System.out.println(managerShouldTerminate);
 
         //upload the tweet links list to S3
-        AmazonS3 s3 = new AmazonS3Client();
+        s3 = new AmazonS3Client();
         Region usEast1 = Region.getRegion(Regions.US_EAST_1);
         s3.setRegion(usEast1);
         System.out.println("Local client running...");
         try {
             System.out.print("Uploading the tweet links file to S3... ");
-            // File file = new File(System.getProperty("user.dir") + "/" + inputFileName);
-            File file = new File(inputFileName);
+             File file = new File(System.getProperty("user.dir") + "/" + inputFileName);
+//            File file = new File(inputFileName);
             s3.putObject(new PutObjectRequest(BUCKET_NAME, objectName, file));
             System.out.println("Done.");
         } catch (AmazonServiceException ase) {
@@ -121,6 +119,7 @@ public class Local {
             upstreamURL = br.readLine();
             downstreamURL = br.readLine();
             br.close();
+            sendRequestInUpstream();
         }
         else { // create the SQSs and start a manager instance
 
@@ -140,8 +139,8 @@ public class Local {
                 System.out.println("Done.");
 
                 // create a file that holds the queues' URLs, and upload it to S3 for the manager
-//                File file = new File(System.getProperty("user.dir") + "/" + URLS_FILENAME);
-                File file = new File(URLS_FILENAME);
+                File file = new File(System.getProperty("user.dir") + "/" + URLS_FILENAME);
+//                File file = new File(URLS_FILENAME);
                 FileWriter fw = new FileWriter(file);
                 fw.write(upstreamURL + "\n");
                 fw.write(downstreamURL + "\n");
@@ -167,14 +166,20 @@ public class Local {
 
             // start a Manager instance
             try {
-                RunInstancesRequest request = new RunInstancesRequest("ami-b66ed3de", 1, 1);
+                System.out.println("Firing up new Manager instance...");
+                RunInstancesRequest request = new RunInstancesRequest("ami-4504112f", 1, 1);
                 request.setInstanceType(InstanceType.T2Micro.toString());
                 request.setUserData(getUserDataScript());
+                IamInstanceProfileSpecification iamInstanceProfileSpecification = new IamInstanceProfileSpecification();
+                iamInstanceProfileSpecification.setName("creds");
+                request.setIamInstanceProfile(iamInstanceProfileSpecification);
+                request.setKeyName("AWS");
                 List<Instance> instances = ec2.runInstances(request).getReservation().getInstances();
                 System.out.println("Launch instances: " + instances);
                 CreateTagsRequest createTagRequest = new CreateTagsRequest();
                 createTagRequest.withResources(instances.get(0).getInstanceId()).withTags(new Tag("kind", "manager"));
                 ec2.createTags(createTagRequest);
+                sendRequestInUpstream();
             } catch (AmazonServiceException ase) {
                 System.out.println("Caught Exception: " + ase.getMessage());
                 System.out.println("Response Status Code: " + ase.getStatusCode());
@@ -193,9 +198,19 @@ public class Local {
             }
         }
         System.out.println("Manager instance running.");
+        compileResultsToHTML();
+    }
 
+    private static void sendRequestInUpstream() {
+        sqs.sendMessage(upstreamURL, id + LINKS_FILENAME_SUFFIX);
+    }
+
+    private static void compileResultsToHTML() throws IOException {
         // await for the results file, and compile it to HTML
         GetQueueAttributesRequest getQueueAttributesRequest = new GetQueueAttributesRequest(downstreamURL);
+        List<String> attributeNames = new LinkedList<>();
+        attributeNames.add("ApproximateNumberOfMessages");
+        getQueueAttributesRequest.setAttributeNames(attributeNames);
         ReceiveMessageResult receiveMessageResult;
         while (true) {
 //            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().get("ApproximateNumberOfMessages").equals("0")) {
@@ -271,8 +286,14 @@ public class Local {
     private static String getUserDataScript(){
         StringBuilder sb = new StringBuilder();
         sb.append("#! /bin/bash\n");
-        sb.append("aws s3 cp s3://asafbendsp/Manager.jar ./Manager.jar\n");
-        sb.append("java -jar Manager.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/Manager.jar Manager.jar\n");
+        sb.append("wget --no-check-certificate --no-cookies --header \"Cookie: oraclelicense=accept-securebackup-cookie\" http://download.oracle.com/otn-pub/java/jdk/8u73-b02/jdk-8u73-linux-x64.rpm\n");
+        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm");
+        sb.append("aws s3 cp s3://asafbendsp/jsoup-1.8.3.jar jsoup-1.8.3.jar\n");
+        sb.append("aws s3 cp s3://asafbendsp/aws-sdk-java/lib . --recursive\n");
+        sb.append("aws s3 cp s3://asafbendsp/aws-sdk-java/thirdparty/lib . --recursive\n");
+        sb.append("jar xf Manager.jar\n");
+        sb.append("java -cp .:./* Manager\n");
         // AWS requires that user data be encoded in base-64
         String str = new String(Base64.encodeBase64(sb.toString().getBytes()));
         return str;

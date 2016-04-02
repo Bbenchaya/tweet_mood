@@ -17,9 +17,9 @@
     <exclude-output />
     <content url="file://$MODULE_DIR$">
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/worker" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/Worker" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/Manager" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/local" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/Local" isTestSource="false" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
