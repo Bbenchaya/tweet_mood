@@ -32,7 +32,7 @@ import static javafx.application.Platform.exit;
 public class Local {
 
     private static final String BUCKET_NAME = "asafbendsp";
-    private static final String RESULTS_FILE_SUFFIX = "results.txt";
+    private static final String RESULTS_FILENAME_SUFFIX = "results.txt";
     private static String inputFileName;
     private static String outputFileName;
     private static String objectName;
@@ -46,6 +46,7 @@ public class Local {
     private static final String URLS_FILENAME = "up-down.txt";
     private static AmazonS3 s3;
     private static AmazonSQS sqs;
+    private static AmazonEC2 ec2;
 
 
     public static void main(String[] args) throws IOException {
@@ -58,6 +59,7 @@ public class Local {
         int workersToFileRatio = Integer.parseInt(args[2]);
         managerShouldTerminate = args.length == 4 && args[3].equals("terminate");
         id = UUID.randomUUID().toString();
+        System.out.println("Local instance id: " + id);
         objectName = id + LINKS_FILENAME_SUFFIX;
 //        for (String arg : args)
 //            System.out.println(arg);
@@ -100,8 +102,10 @@ public class Local {
                             "location (~/.aws/credentials), and is in valid format.",
                     e);
         }
-        AmazonEC2 ec2 = new AmazonEC2Client(credentials);
+        ec2 = new AmazonEC2Client(credentials);
         ec2.setRegion(usEast1);
+        sqs = new AmazonSQSClient(credentials);
+        sqs.setRegion(usEast1);
         List<String> tagValues = new ArrayList<>();
         tagValues.add("manager");
         Filter tagFilter = new Filter("tag:kind", tagValues);
@@ -125,8 +129,6 @@ public class Local {
 
             System.out.println("No Manager instance currently running.");
             // start 2 SQSs: upstream, downstream
-            sqs = new AmazonSQSClient(credentials);
-            sqs.setRegion(usEast1);
             try {
                 // Create the upstream and downstream queues
                 System.out.print("Creating upstream queue... ");
@@ -167,7 +169,7 @@ public class Local {
             // start a Manager instance
             try {
                 System.out.println("Firing up new Manager instance...");
-                RunInstancesRequest request = new RunInstancesRequest("ami-4504112f", 1, 1);
+                RunInstancesRequest request = new RunInstancesRequest("ami-08111162", 1, 1);
                 request.setInstanceType(InstanceType.T2Micro.toString());
                 request.setUserData(getUserDataScript());
                 IamInstanceProfileSpecification iamInstanceProfileSpecification = new IamInstanceProfileSpecification();
@@ -212,21 +214,26 @@ public class Local {
         attributeNames.add("ApproximateNumberOfMessages");
         getQueueAttributesRequest.setAttributeNames(attributeNames);
         ReceiveMessageResult receiveMessageResult;
+        System.out.println("Awaiting results...");
         while (true) {
 //            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().get("ApproximateNumberOfMessages").equals("0")) {
-            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().isEmpty()) {
+            while ((receiveMessageResult = sqs.receiveMessage(downstreamURL)).getMessages().isEmpty()) {
                 try {
                     sleep(1000);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
             }
-            receiveMessageResult = sqs.receiveMessage(downstreamURL);
-            if (receiveMessageResult.toString().contains(id + "done")) {
-                List<Message> messages = receiveMessageResult.getMessages();
+//            if (receiveMessageResult.toString().contains(id + "done")) {
+                if (receiveMessageResult.toString().contains("done")) {
+
+                    List<Message> messages = receiveMessageResult.getMessages();
                 for (Message message : messages) {
-                    if (message.getBody().contains(id + "done")) {
+//                    if (message.getBody().contains(id + "done")) {
+                        if (message.getBody().contains("done")) {
+
                         String messageReceiptHandle = message.getReceiptHandle();
+                        sqs.changeMessageVisibility(downstreamURL, messageReceiptHandle, 0);
                         sqs.deleteMessage(new DeleteMessageRequest(downstreamURL, messageReceiptHandle));
                         break;
                     }
@@ -235,7 +242,7 @@ public class Local {
             }
         }
         System.out.print("Downloading results file from S3... ");
-        S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, id + RESULTS_FILE_SUFFIX));
+        S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, id + RESULTS_FILENAME_SUFFIX));
         System.out.println("Done.");
         File output = new File(System.getProperty("user.dir") + "/" + outputFileName);
         FileWriter fw = new FileWriter(output);
@@ -244,10 +251,19 @@ public class Local {
         scanner.useDelimiter("<delimiter>");
 
         //tokenize the reservations file and process each token one at a time
-        System.out.print("Compiling the results to HTML... ");
+        System.out.println("Compiling the results to HTML. Output path: " + System.getProperty("user.dir") + "/" + outputFileName);
         while (scanner.hasNext()) {
             String result = scanner.next();
-            String tweet = result.substring(result.indexOf("<tweet>") + 7, result.indexOf("</tweet>"));
+//            System.out.println(result);
+            // handle the tail after the last delimiter
+            if (result.equals("</result>"))
+                break;
+            String tweet = null;
+            try {
+                tweet = result.substring(result.indexOf("<tweet>") + 7, result.indexOf("</tweet>"));
+            }catch (Exception e){
+                System.out.println("bad result: " + result);
+            }
             String sentiment = result.substring(result.indexOf("<sentiment>") + 11, result.indexOf("</sentiment>"));
             String entities = result.substring(result.indexOf("<entities>") + 10, result.indexOf("</entities>"));
             String fontColor = null;
@@ -280,22 +296,28 @@ public class Local {
         fw.flush();
         fw.close();
         scanner.close();
-        System.out.println("Done.");
+        System.out.println("Finished execution, exiting...");
     }
 
     private static String getUserDataScript(){
         StringBuilder sb = new StringBuilder();
         sb.append("#! /bin/bash\n");
-        sb.append("aws s3 cp s3://asafbendsp/Manager.jar Manager.jar\n");
+        sb.append("cd /home/ec2-user\n");
         sb.append("wget --no-check-certificate --no-cookies --header \"Cookie: oraclelicense=accept-securebackup-cookie\" http://download.oracle.com/otn-pub/java/jdk/8u73-b02/jdk-8u73-linux-x64.rpm\n");
-        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm");
+        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm\n");
+        sb.append("aws s3 cp s3://asafbendsp/Manager.jar Manager.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/jsoup-1.8.3.jar jsoup-1.8.3.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/aws-sdk-java/lib . --recursive\n");
         sb.append("aws s3 cp s3://asafbendsp/aws-sdk-java/thirdparty/lib . --recursive\n");
         sb.append("jar xf Manager.jar\n");
         sb.append("java -cp .:./* Manager\n");
         // AWS requires that user data be encoded in base-64
-        String str = new String(Base64.encodeBase64(sb.toString().getBytes()));
+        String str = null;
+        try {
+            str = new String(Base64.encodeBase64(sb.toString().getBytes("UTF-8")), "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+        }
         return str;
     }
 

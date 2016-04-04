@@ -26,13 +26,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.lang.Thread.sleep;
 
 // TODO extract the different code sections to methods
+// TODO implement proper process termination
 
 public class Manager {
 
     private static final String BUCKET_NAME = "asafbendsp";
     private static final String URLS_FILENAME = "up-down.txt";
     private static final String WORKER_QUEUES_FILENAME = "jobs-results.txt";
-    private static final String OUTPUT_FILENAME_SUFFIX = "output.txt";
+    private static final String RESULTS_FILENAME_SUFFIX = "results.txt";
     private static int workersPerTweetsRatio;
     private static AtomicInteger numOfActiveWorkers;
     private static AtomicInteger pendingTweets;
@@ -66,11 +67,11 @@ public class Manager {
         br.close();
 
         // create the queues to interface with the workers
-        System.out.print("Creating jobs queue...");
+        System.out.print("Creating jobs queue... ");
         CreateQueueRequest createJobsQueueRequest = new CreateQueueRequest("jobs");
         jobsURL = sqs.createQueue(createJobsQueueRequest).getQueueUrl();
         System.out.println("Done.");
-        System.out.print("Creating results queue...");
+        System.out.print("Creating results queue... ");
         CreateQueueRequest createResultsQueueRequest = new CreateQueueRequest("results");
         resultsURL = sqs.createQueue(createResultsQueueRequest).getQueueUrl();
         System.out.println("Done.");
@@ -97,15 +98,13 @@ public class Manager {
                 System.out.println("Awaiting incoming requests...");
                 while (Manager.shouldProcessRequests()) {
                     String id = null;
-                    while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().isEmpty()) {
+                    while ((receiveMessageResult = sqs.receiveMessage(upstreamURL)).getMessages().isEmpty()) {
                         try {
                             sleep(1000);
                         } catch (InterruptedException e) {
                             e.printStackTrace();
                         }
                     }
-                    System.out.println("Receiving incoming request at UPSTREAM...");
-                    receiveMessageResult = sqs.receiveMessage(upstreamURL);
                     if (!receiveMessageResult.toString().contains("terminate")) { // there's no termination message in the UPSTREAM queue
                         List<Message> messages = receiveMessageResult.getMessages();
                         // TODO check if necessary, maybe switch to messages.getMessages().get(0)
@@ -115,16 +114,21 @@ public class Manager {
                                 // create an entry that will hold the results of the request
                                 requests.put(id, new RequestStatus());
                                 String messageReceiptHandle = message.getReceiptHandle();
+                                sqs.changeMessageVisibility(upstreamURL, messageReceiptHandle, 0);
                                 sqs.deleteMessage(new DeleteMessageRequest(upstreamURL, messageReceiptHandle));
                                 break;
                             }
                         }
 
+                        if (id == null)
+                            continue;
                         // download the tweet links file from S3
-                        System.out.print("Downloading tweet links file from S3... ");
+                        System.out.format("Downloading tweet links file from S3: %s... ", id + "links.txt");
                         S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, id + "links.txt"));
                         System.out.println("Done.");
-                        Scanner scanner = new Scanner(new InputStreamReader(object.getObjectContent()));
+                        // TODO much odd!!!
+                        final Scanner scanner = new Scanner(new InputStreamReader(object.getObjectContent()));
+                        BufferedReader br = new BufferedReader(new InputStreamReader(object.getObjectContent()));
                         final String finalId = id;
                         Thread getAndParseTweetLinksFile = new Thread() {
                             @Override
@@ -134,14 +138,22 @@ public class Manager {
                                 Stack<String> links = new Stack<>();
                                 String link;
                                 int numOfTweets = 0;
-                                while ((link = scanner.nextLine()) != null) {
-                                    links.push(link);
-                                    numOfTweets++;
-                                    if (((double) numOfTweets) / workersPerTweetsRatio - numOfActiveWorkers.get() >= 0) {
-                                        System.out.println("Creating new worker. Number of pending tweets: " + pendingTweets.get());
-                                        // at this point, there's already in entry in 'requests' for the relevant request
-                                        Manager.createWorker();
+//                                while ((link = scanner.nextLine()) != null) {
+                                try {
+                                    while ((link = br.readLine()) != null) {
+
+                                        links.push(link);
+                                        numOfTweets++;
+                                        double calc = ((double) numOfTweets) / workersPerTweetsRatio - numOfActiveWorkers.get();
+                                        if (calc > 0) {
+                                            System.out.println("Creating new worker. Number of pending tweets: " + (pendingTweets.get() + numOfTweets));
+                                            // at this point, there's already in entry in 'requests' for the relevant request
+                                            Manager.createWorker();
+                                        }
                                     }
+                                } catch (IOException e) {
+                                    e.printStackTrace();
+                                    System.out.println(Thread.currentThread().getName());
                                 }
                                 scanner.close();
                                 // TODO synchronize?
@@ -152,8 +164,10 @@ public class Manager {
                                 for (String link2 : links) {
                                     try {
                                         doc = Jsoup.connect(link2).get();
-                                    } catch (IOException e) {
-                                        e.printStackTrace();
+                                    } catch (Exception e) {
+                                        // TODO inc missed links counter
+//                                        e.printStackTrace();
+                                        System.out.println("dropped link: " + link2);
                                     }
                                     content = doc.select("title");
                                     sqs.sendMessage(jobsURL, "<id>" + finalId + "</id><content>" + content.text() + "</content>");
@@ -210,10 +224,13 @@ public class Manager {
                         String id = body.substring(body.indexOf("<id>") + 4, body.indexOf("</id>"));
                         String result = body.substring(body.indexOf("<tweet>"), body.length());
                         // TODO synchronize?
-                        requests.get(id).addResult(result);
+                        RequestStatus requestStatus = requests.get(id);
+                        if (requestStatus != null)
+                            requests.get(id).addResult(result);
                         pendingTweets.addAndGet(-1);
                         String messageReceiptHandle = message.getReceiptHandle();
-                        sqs.deleteMessage(new DeleteMessageRequest(upstreamURL, messageReceiptHandle));
+                        sqs.changeMessageVisibility(resultsURL, messageReceiptHandle, 0);
+                        sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
                         System.out.println("Processed result: id: " + id + " result: " + result);
                     }
                     try {
@@ -285,7 +302,7 @@ public class Manager {
 
     private static void compileAndSendResults(String key, String results) {
         String output = "<id>" + key + "</id>" + results;
-        File file = new File(key + OUTPUT_FILENAME_SUFFIX);
+        File file = new File(key + RESULTS_FILENAME_SUFFIX);
         FileWriter fw = null;
         try {
             fw = new FileWriter(file);
@@ -296,7 +313,7 @@ public class Manager {
             e.printStackTrace();
         }
         System.out.print("Finished compiling results file, uploading to S3... ");
-        s3.putObject(new PutObjectRequest(BUCKET_NAME, key + OUTPUT_FILENAME_SUFFIX, file));
+        s3.putObject(new PutObjectRequest(BUCKET_NAME, key + RESULTS_FILENAME_SUFFIX, file));
         System.out.println("Done.");
         sqs.sendMessage(downstreamURL, key + "done");
     }
@@ -304,7 +321,7 @@ public class Manager {
     private static void createWorker() {
         // start a Worker instance
         try {
-            RunInstancesRequest request = new RunInstancesRequest("ami-4504112f", 1, 1); // base AMI: b66ed3de
+            RunInstancesRequest request = new RunInstancesRequest("ami-08111162", 1, 1); // base AMI: b66ed3de
             request.setInstanceType(InstanceType.T2Micro.toString());
             request.setUserData(getUserDataScript());
             IamInstanceProfileSpecification iamInstanceProfileSpecification = new IamInstanceProfileSpecification();
@@ -333,17 +350,23 @@ public class Manager {
     private static String getUserDataScript(){
         StringBuilder sb = new StringBuilder();
         sb.append("#! /bin/bash\n");
+        sb.append("cd /home/ec2-user\n");
         sb.append("aws s3 cp s3://asafbendsp/ejml-0.23.jar ejml-0.23.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/jollyday-0.4.7.jar jollyday-0.4.7.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0-models.jar stanford-corenlp-3.3.0-models.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0.jar stanford-corenlp-3.3.0.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/Worker.jar Worker.jar\n");
         sb.append("wget --no-check-certificate --no-cookies --header \"Cookie: oraclelicense=accept-securebackup-cookie\" http://download.oracle.com/otn-pub/java/jdk/8u73-b02/jdk-8u73-linux-x64.rpm\n");
-        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm");
+        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm\n");
         sb.append("jar xf Worker.jar\n");
         sb.append("java -cp .:./* Worker\n");
         // AWS requires that user data be encoded in base-64
-        String str = new String(Base64.encodeBase64(sb.toString().getBytes()));
+        String str = null;
+        try {
+            str = new String(Base64.encodeBase64(sb.toString().getBytes("UTF-8")), "UTF-8");
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+        }
         return str;
     }
 

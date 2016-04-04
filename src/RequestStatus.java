@@ -4,33 +4,33 @@ import java.util.List;
 /**
  * Created by asafchelouche on 30/3/16.
  */
-public class RequestStatus {
+class RequestStatus {
 
     private int numOfExpectedResults;
     private List<String> results;
 
-    public RequestStatus() {
+    RequestStatus() {
         numOfExpectedResults = -1;
         results = new LinkedList<>();
     }
 
-    public int numOfResults() {
+    private int numOfResults() {
         return results.size();
     }
 
-    public boolean hasAllResults() {
-        return numOfExpectedResults == -1 || numOfExpectedResults > numOfResults();
+    boolean hasAllResults() {
+        return !(numOfExpectedResults == -1 || numOfExpectedResults > numOfResults());
     }
 
-    public void setNumOfExpectedResults(int numOfExpectedResults) {
+    void setNumOfExpectedResults(int numOfExpectedResults) {
         this.numOfExpectedResults = numOfExpectedResults;
     }
 
-    public void addResult(String result) {
+    void addResult(String result) {
         results.add(result);
     }
 
-    public String getResults() {
+    String getResults() {
         StringBuilder sb = new StringBuilder();
         for (String result : results) {
             sb.append("<result>");

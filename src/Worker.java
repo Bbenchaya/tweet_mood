@@ -63,7 +63,12 @@ public class Worker {
         s3 = new AmazonS3Client();
         Region usEast1 = Region.getRegion(Regions.US_EAST_1);
         s3.setRegion(usEast1);
-        System.out.println("Manager running...");
+
+        // initiate connection to SQS
+        sqs = new AmazonSQSClient();
+        sqs.setRegion(usEast1);
+
+        System.out.println("Worker running...");
 //        AWSCredentials credentials = null;
 //        try {
 //            credentials = new ProfileCredentialsProvider().getCredentials();
@@ -75,12 +80,8 @@ public class Worker {
 //                    e);
 //        }
 
-        // initiate connection to SQS
-        sqs = new AmazonSQSClient();
-        sqs.setRegion(usEast1);
-
         // get the  SQS URLs file from S3
-        System.out.print("Downloading URLs file from S3... ");
+        System.out.print("Downloading jobs/results queues' URLs file from S3... ");
         S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, WORKER_QUEUES_FILENAME));
         System.out.println("Done.");
         BufferedReader br = new BufferedReader(new InputStreamReader(object.getObjectContent()));
@@ -93,15 +94,13 @@ public class Worker {
         ReceiveMessageResult receiveMessageResult;
         while (true) {
 //            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().get("ApproximateNumberOfMessages").equals("0")) {
-            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().isEmpty()) {
-
+            while ((receiveMessageResult = sqs.receiveMessage(jobsURL)).getMessages().isEmpty()) {
                     try {
                     sleep(1000);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
             }
-            receiveMessageResult = sqs.receiveMessage(jobsURL);
             List<Message> messages = receiveMessageResult.getMessages();
             // all incoming jobs have been processed, and the last 'job' is a termination message
             if (messages.size() == 1 && messages.get(0).getBody().contains("terminate")) {
@@ -114,17 +113,17 @@ public class Worker {
             for (Message message : messages) {
                     // analyze the tweet, create the result message and place it in 'results' SQS
                     String job = message.getBody();
-                    String id = job.substring(4, job.indexOf("</id>"));
-                    String tweet = job.substring(job.indexOf("<tweet>" + 7), job.indexOf("</tweet>"));
+                    String id = job.substring(job.indexOf("<id>") + 4, job.indexOf("</id>"));
+                    String tweet = job.substring(job.indexOf("<content>") + 9, job.indexOf("</content>"));
                     int sentiment = findSentiment(tweet);
-//                System.out.println("Sentiment: " + sentiment);
+                System.out.println("Sentiment: " + sentiment);
                     String entities = extractEntities(tweet);
-//                System.out.println("Entities: " + entities);
+                System.out.println("Entities: " + entities);
                     String result = resultAsString(id, tweet, sentiment, entities);
                     sqs.sendMessage(resultsURL, result);
-                    // TODO get the message from jobs, and delete it
                     String messageReceiptHandle = message.getReceiptHandle();
-                    sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
+//                    sqs.changeMessageVisibility(jobsURL, messageReceiptHandle, 0);
+                    sqs.deleteMessage(new DeleteMessageRequest(jobsURL, messageReceiptHandle));
                 }
             }
         System.out.println("Done.");
