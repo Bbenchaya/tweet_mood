@@ -169,7 +169,8 @@ public class Local {
             // start a Manager instance
             try {
                 System.out.println("Firing up new Manager instance...");
-                RunInstancesRequest request = new RunInstancesRequest("ami-08111162", 1, 1);
+//                RunInstancesRequest request = new RunInstancesRequest("ami-08111162", 1, 1);
+                RunInstancesRequest request = new RunInstancesRequest("ami-37d0c45d", 1, 1);
                 request.setInstanceType(InstanceType.T2Micro.toString());
                 request.setUserData(getUserDataScript());
                 IamInstanceProfileSpecification iamInstanceProfileSpecification = new IamInstanceProfileSpecification();
@@ -256,7 +257,7 @@ public class Local {
             String result = scanner.next();
 //            System.out.println(result);
             // handle the tail after the last delimiter
-            if (result.equals("</result>"))
+            if (result.equals("</result>\n"))
                 break;
             String tweet = null;
             try {

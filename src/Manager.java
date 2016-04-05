@@ -321,7 +321,8 @@ public class Manager {
     private static void createWorker() {
         // start a Worker instance
         try {
-            RunInstancesRequest request = new RunInstancesRequest("ami-08111162", 1, 1); // base AMI: b66ed3de
+//            RunInstancesRequest request = new RunInstancesRequest("ami-08111162", 1, 1); // base AMI: b66ed3de
+            RunInstancesRequest request = new RunInstancesRequest("ami-37d0c45d", 1, 1);
             request.setInstanceType(InstanceType.T2Micro.toString());
             request.setUserData(getUserDataScript());
             IamInstanceProfileSpecification iamInstanceProfileSpecification = new IamInstanceProfileSpecification();

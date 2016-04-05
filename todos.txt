@@ -1,0 +1,6 @@
+- handle proper termination
+- entity linking to wikipedia
+- links in out.html
+- worker statistics
+- README.md
+- README for majeed
