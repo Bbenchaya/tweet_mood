@@ -13,9 +13,6 @@ import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClient;
 import com.amazonaws.services.sqs.model.*;
 import org.apache.commons.codec.binary.Base64;
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
-import org.jsoup.select.Elements;
 
 import java.io.*;
 import java.util.*;
@@ -26,7 +23,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static java.lang.Thread.sleep;
 
 // TODO extract the different code sections to methods
-// TODO implement proper process termination
 
 public class Manager {
 
@@ -38,20 +34,22 @@ public class Manager {
     private static int workersPerTweetsRatio;
     private static AtomicInteger numOfActiveWorkers;
     private static AtomicInteger pendingTweets;
-    private static List<String> workerStatistics;
+    private static boolean firstRequestReceived;
     private static String upstreamURL;
     private static String downstreamURL;
     private static String jobsURL;
     private static String resultsURL;
-    private static AtomicBoolean alive;
+    private static AtomicBoolean shouldTerminate;
     private static AtomicBoolean shouldProcessRequests;
+    private static AtomicBoolean firstWorkerRunning;
     private static AmazonEC2 ec2;
     private static AmazonS3 s3;
     private static AmazonSQS sqs;
     private static ConcurrentHashMap<String, RequestStatus> requests;
+    private static HashMap<String, WorkerStatistics> workerStatistics;
 
-    private static boolean isAlive() {
-        return alive.get();
+    private static boolean shouldTerminate() {
+        return shouldTerminate.get();
     }
 
     public static void main(String[] args) throws IOException {
@@ -162,9 +160,10 @@ public class Manager {
                                 // parse the links from the file and create new jobs for the Workers
                                 for (String link2 : links) {
                                     sqs.sendMessage(jobsURL, "<id>" + finalId + "</id><link>" + link2 + "</link>");
+                                    pendingTweets.addAndGet(1);
                                 }
-                                // TODO synchronize?
                                 requests.get(finalId).setNumOfExpectedResults(numOfTweets);
+                                firstRequestReceived = true;
                                 System.out.println("Finished handling request for Local id: " + finalId);
                             }
                         };
@@ -172,6 +171,11 @@ public class Manager {
                     }
                     else {  // termination message received in UPSTREAM queue
                         shouldProcessRequests.set(false);
+                        sqs.sendMessage(jobsURL, "terminate");
+//                        String messageReceiptHandle = message.getReceiptHandle();
+//                        sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
+//                        sqs.purgeQueue(new PurgeQueueRequest(upstreamURL));
+                        sqs.deleteQueue(upstreamURL);
                     }
                 }
             }
@@ -184,7 +188,7 @@ public class Manager {
         Thread compileResults = new Thread() {
             @Override
             public void run() {
-                while (Manager.isAlive()) {
+                while (Manager.shouldTerminate()) {
                     // TODO synchronize?
                     Iterator<Map.Entry<String, RequestStatus>> it = requests.entrySet().iterator();
                     while (it.hasNext()) {
@@ -200,101 +204,133 @@ public class Manager {
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
+                    if (requests.isEmpty() && firstRequestReceived)
+                        break;
                 }
             }
         };
         compileResults.start();
 
-        // setup and run the thread that awaits and processes results
-        Thread findAndHandleResults = new Thread() {
-            @Override
-            public void run() {
-                while (Manager.isAlive()) {
-                    ReceiveMessageResult receiveMessageResult = sqs.receiveMessage(resultsURL);
-                    for (Message message : receiveMessageResult.getMessages()) {
-                        String body = message.getBody();
-                        if (body.contains("<worker-stats>")) {
-                            workerStatistics.add(body.substring(body.indexOf("<worker-stats>") + 14, body.indexOf("</worker-stats")));
-                            String messageReceiptHandle = message.getReceiptHandle();
+        // await and processes results
+        while (!(firstRequestReceived && requests.isEmpty() && pendingTweets.get() == 0 && Manager.shouldTerminate())) {
+            ReceiveMessageResult receiveMessageResult = sqs.receiveMessage(resultsURL);
+            for (Message message : receiveMessageResult.getMessages()) {
+                String body = message.getBody();
+                String workerId = body.substring(body.indexOf("<worker-id>") + 11, body.indexOf("</worker-id>"));
+                workerStatistics.putIfAbsent(workerId, new WorkerStatistics());
+                if (body.contains("<dropped-link>")) {
+                    RequestStatus tempRequest =  requests.get(body.substring(body.indexOf("<dropped-link>") + 14, body.indexOf("</dropped-link>")));
+                    if (tempRequest != null)
+                        tempRequest.decrementExpectedResults();
+                    String messageReceiptHandle = message.getReceiptHandle();
 //                            sqs.changeMessageVisibility(resultsURL, messageReceiptHandle, 0);
-                            sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
-                        }
-                        else if (body.contains("<dropped-link>")) {
-                            RequestStatus tempRequest =  requests.get(body.substring(body.indexOf("<dropped-link>") + 14, body.indexOf("</dropped-link>")));
-                            if (tempRequest != null)
-                                tempRequest.decrementExpectedResults();
-                            String messageReceiptHandle = message.getReceiptHandle();
+                    sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
+                    pendingTweets.decrementAndGet();
+                    workerStatistics.get(workerId).addDropped();
+                }
+                else {
+                    String id = body.substring(body.indexOf("<id>") + 4, body.indexOf("</id>"));
+                    String result = body.substring(body.indexOf("<tweet>"), body.length());
+                    RequestStatus requestStatus = requests.get(id);
+                    if (requestStatus != null)
+                        requests.get(id).addResult(result);
+                    String messageReceiptHandle = message.getReceiptHandle();
 //                            sqs.changeMessageVisibility(resultsURL, messageReceiptHandle, 0);
-                            sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
-                        }
-                        else {
-                            String id = body.substring(body.indexOf("<id>") + 4, body.indexOf("</id>"));
-                            String result = body.substring(body.indexOf("<tweet>"), body.length());
-                            // TODO synchronize?
-                            RequestStatus requestStatus = requests.get(id);
-                            if (requestStatus != null)
-                                requests.get(id).addResult(result);
-                            pendingTweets.addAndGet(-1);
-                            String messageReceiptHandle = message.getReceiptHandle();
-//                            sqs.changeMessageVisibility(resultsURL, messageReceiptHandle, 0);
-                            sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
-                            System.out.println("Processed result: id: " + id + " result: " + result);
-                        }
-                    }
-                    try {
-                        sleep(500);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
+                    sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
+                    System.out.println("Processed result: id: " + id + " result: " + result);
+                    pendingTweets.decrementAndGet();
+                    workerStatistics.get(workerId).addSuccessful();
                 }
             }
-        };
-        findAndHandleResults.start();
-
-        // TODO add a thread that checks if all workers are dead but no termination message was received, so start new Worker instances
-
-        // wait for all Workers to DIE!!!
-        List<String> tagValues = new ArrayList<>();
-        tagValues.add("worker");
-        Filter tagFilter = new Filter("tag:kind", tagValues);
-        List<String> statusValues = new ArrayList<>();
-        statusValues.add("running");
-        Filter statusFilter = new Filter("instance-state-name", statusValues);
-        while (true) {
-            DescribeInstancesResult filteredInstances = ec2.describeInstances(new DescribeInstancesRequest().withFilters(tagFilter, statusFilter));
-            List<Reservation> reservations = filteredInstances.getReservations();
-            // if there are no running workers, break and finish execution
-            if (reservations.size() == 0 && numOfActiveWorkers.get() >= 0)
-                break;
-            else
-                try {
-                    sleep(1000);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
+            try {
+                sleep(500);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
 
-        // Manager has ended execution
+//        Thread raiseRedundantWorkers = new Thread() {
+//            @Override
+//            public void run() {
+//                List<String> tagValues = new ArrayList<>();
+//                tagValues.add("worker");
+//                Filter tagFilter = new Filter("tag:kind", tagValues);
+//                List<String> statusValues = new ArrayList<>();
+//                statusValues.add("running");
+//                Filter statusFilter = new Filter("instance-state-name", statusValues);
+//                List<Reservation> reservations;
+//                DescribeInstancesResult filteredInstances;
+//                DescribeInstancesRequest describeInstancesRequest = new DescribeInstancesRequest().withFilters(tagFilter, statusFilter);
+//                do {
+//                    filteredInstances = ec2.describeInstances(describeInstancesRequest);
+//                    reservations= filteredInstances.getReservations();
+//                    {
+//                        int numOfMissingWorkers = numOfActiveWorkers.get() - reservations.size();
+//                        for (int i = 0; i < numOfMissingWorkers && firstWorkerRunning.get(); i++) {
+//                            Manager.createWorker();
+//                        }
+//                        try {
+//                            sleep(30000);
+//                        } catch (InterruptedException e) {
+//                            e.printStackTrace();
+//                        }
+//                    }
+//                } while (!shouldTerminate() && firstRequestReceived && numOfActiveWorkers.get() > reservations.size());
+//            }
+//        };
+//        raiseRedundantWorkers.start();
+
+        if (numOfActiveWorkers.get() > 0) {
+            // TODO handle pending results
+        }
+
+        // compile Worker statistics
+        compileWorkerStatistics();
+
+        System.out.println("Manager has finished execution, exiting...");
 
     }
 
+    private static void compileWorkerStatistics() throws IOException {
+        // TODO the Manager should maintain all stats in a hash table: assign each worker a UUID, and append it to results/dropped link message
+        System.out.print("Compiling worker statistics... ");
+        File statsFile = new File("worker-statistics.txt");
+        FileWriter fw = new FileWriter(statsFile);
+        int num = 1;
+        for (Map.Entry<String, WorkerStatistics> stats : workerStatistics.entrySet()) {
+            int successful = stats.getValue().getSuccessful();
+            int dropped = stats.getValue().getDropped();
+            String workerId = stats.getKey();
+            fw.write("Worker id. " + workerId + ", total: " + (successful+dropped) + ", successful: " + successful + ", dropped: " + dropped);
+            num++;
+            fw.flush();
+        }
+        fw.close();
+        System.out.println("Done.");
+        System.out.print("Uploading worker statistics to S3... ");
+        s3.putObject(new PutObjectRequest(BUCKET_NAME, WORKER_STATS_FILENAME, statsFile));
+        System.out.println("Done.");
+    }
+
     private static void init() {
-        workerStatistics = new LinkedList<>();
+        workerStatistics = new HashMap<>();
         requests = new ConcurrentHashMap<>();
-        alive = new AtomicBoolean();
-        alive.set(true);
+        shouldTerminate = new AtomicBoolean();
+        shouldTerminate.set(true);
         shouldProcessRequests = new AtomicBoolean();
         shouldProcessRequests.set(true);
         numOfActiveWorkers = new AtomicInteger();
-        numOfActiveWorkers.set(-1);
+        numOfActiveWorkers.set(0);
         pendingTweets = new AtomicInteger();
         pendingTweets.set(0);
+        firstRequestReceived = false;
+        firstWorkerRunning = new AtomicBoolean();
+        firstWorkerRunning.set(false);
 
         // initiate connection to S3
         s3 = new AmazonS3Client();
         Region usEast1 = Region.getRegion(Regions.US_EAST_1);
         s3.setRegion(usEast1);
-        System.out.println("Manager running...");
 
         // initiate connection to EC2
         ec2 = new AmazonEC2Client();
@@ -303,6 +339,8 @@ public class Manager {
         // initiate connection to SQS
         sqs = new AmazonSQSClient();
         sqs.setRegion(usEast1);
+
+        System.out.println("Manager running...");
     }
 
     private static boolean shouldProcessRequests() {
@@ -343,11 +381,41 @@ public class Manager {
             createTagRequest.withResources(instances.get(0).getInstanceId()).withTags(new Tag("kind", "worker"));
             ec2.createTags(createTagRequest);
             // the synchronization looks redundant, but using atomics makes the code easier in 2 other places
-            synchronized (numOfActiveWorkers) {
-                if (numOfActiveWorkers.get() == -1)
-                    numOfActiveWorkers.set(1);
-                else
-                    numOfActiveWorkers.addAndGet(1);
+            numOfActiveWorkers.incrementAndGet();
+//            synchronized (numOfActiveWorkers) {
+//                if (numOfActiveWorkers.get() == -1)
+//                    numOfActiveWorkers.set(1);
+//                else
+//                    numOfActiveWorkers.addAndGet(1);
+//            }
+
+            /*
+            Wait for the first Worker instance to run. This is important - if there are pending tweets, but all Worker
+            instances are dead (due to some AWS malfunction), you need to raise new Worker instances to handle all of
+            the pending jobs.
+             */
+            if (!firstWorkerRunning.get()){
+                System.out.print("Waiting for the first worker to run... ");
+                List<String> tagValues = new ArrayList<>();
+                tagValues.add("worker");
+                Filter tagFilter = new Filter("tag:kind", tagValues);
+                List<String> statusValues = new ArrayList<>();
+                statusValues.add("running");
+                Filter statusFilter = new Filter("instance-state-name", statusValues);
+                DescribeInstancesRequest describeInstancesRequest = new DescribeInstancesRequest().withFilters(tagFilter, statusFilter);
+                DescribeInstancesResult filteredInstances;
+                List<Reservation> reservations;
+//                do {
+//                    filteredInstances = ec2.describeInstances(describeInstancesRequest);
+//                    reservations = filteredInstances.getReservations();
+//                    try {
+//                        sleep(1000);
+//                    } catch (InterruptedException e) {
+//                        e.printStackTrace();
+//                    }
+//                } while (reservations.isEmpty());
+                firstWorkerRunning.set(true);
+                System.out.println("Done.");
             }
         } catch (AmazonServiceException ase) {
             System.out.println("Caught Exception: " + ase.getMessage());

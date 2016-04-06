@@ -35,6 +35,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.List;
 import java.util.Properties;
+import java.util.UUID;
 
 import static java.lang.Thread.sleep;
 
@@ -54,6 +55,7 @@ public class Worker {
     private static AmazonSQS sqs;
     private static int droppedLinks;
     private static int successfulLinks;
+    private static String id;
 
     public static void main(String[] args) throws IOException {
         init();
@@ -102,7 +104,7 @@ public class Worker {
             for (Message message : messages) {
                 // analyze the tweet, create the result message and place it in 'results' SQS
                 String job = message.getBody();
-                String id = job.substring(job.indexOf("<id>") + 4, job.indexOf("</id>"));
+                String localClientId = job.substring(job.indexOf("<id>") + 4, job.indexOf("</id>"));
                 String link = job.substring(job.indexOf("<link>") + 6, job.indexOf("</link>"));
                 Document doc = null;
                 Elements content;
@@ -112,7 +114,7 @@ public class Worker {
 //                                        e.printStackTrace();
                     System.out.println("dropped link: " + link);
                     droppedLinks++;
-                    sqs.sendMessage(resultsURL, droppedLinkMessage(id));
+                    sqs.sendMessage(resultsURL, droppedLinkMessage(localClientId));
                     continue;
                 }
                 successfulLinks++;
@@ -122,24 +124,17 @@ public class Worker {
                 System.out.println("Sentiment: " + sentiment);
                 String entities = extractEntities(tweet);
                 System.out.println("Entities: " + entities);
-                String result = resultAsString(id, tweet, sentiment, entities);
+                String result = resultAsString(localClientId, tweet, sentiment, entities);
                 sqs.sendMessage(resultsURL, result);
                 String messageReceiptHandle = message.getReceiptHandle();
 //                    sqs.changeMessageVisibility(jobsURL, messageReceiptHandle, 0);
                 sqs.deleteMessage(new DeleteMessageRequest(jobsURL, messageReceiptHandle));
             }
-//                    String tweet = job.substring(job.indexOf("<content>") + 9, job.indexOf("</content>"));
-
         }
-        sqs.sendMessage(resultsURL, workerDeathMessage());
     }
 
-    private static String droppedLinkMessage(String id) {
-        return "<dropped-link>" + id + "</dropped-link>";
-    }
-
-    private static String workerDeathMessage() {
-        return "<worker-stats><successful>" + successfulLinks + "</successful><dropped>" + droppedLinks + "</dropped></worker-stats>";
+    private static String droppedLinkMessage(String localClientId) {
+        return "<dropped-link><local-id>" + localClientId + "</local-id><worker-id>" + id + "</worker-id></dropped-link>";
     }
 
     private static void init() {
@@ -152,6 +147,7 @@ public class Worker {
         NERPipeline = new StanfordCoreNLP(entityProps);
         droppedLinks = 0;
         successfulLinks = 0;
+        id = UUID.randomUUID().toString();
 
         // initiate connection to S3
         s3 = new AmazonS3Client();
@@ -220,10 +216,10 @@ public class Worker {
         return sb.toString();
     }
 
-    private static String resultAsString(String id, String tweet, int sentiment, String entities) {
+    private static String resultAsString(String localClientId, String tweet, int sentiment, String entities) {
         StringBuilder sb = new StringBuilder();
         sb.append("<id>");
-        sb.append(id);
+        sb.append(localClientId);
         sb.append("</id>");
         sb.append("<tweet>");
         sb.append(tweet);
@@ -234,6 +230,9 @@ public class Worker {
         sb.append("<entities>");
         sb.append(entities);
         sb.append("</entities>");
+        sb.append("<worker-id>");
+        sb.append(id);
+        sb.append("</worker-id>");
         sb.append("<delimiter>");
         return sb.toString();
     }

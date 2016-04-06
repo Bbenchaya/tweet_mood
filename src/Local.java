@@ -297,6 +297,10 @@ public class Local {
         fw.flush();
         fw.close();
         scanner.close();
+        if (managerShouldTerminate) {
+            sqs.sendMessage(upstreamURL, "<id>" + id + "</id>terminate");
+            System.out.println("Sent termination message to the Manager.");
+        }
         System.out.println("Finished execution, exiting...");
     }
 

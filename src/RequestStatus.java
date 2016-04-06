@@ -14,12 +14,8 @@ class RequestStatus {
         results = new LinkedList<>();
     }
 
-    private int numOfResults() {
-        return results.size();
-    }
-
     boolean hasAllResults() {
-        return !(numOfExpectedResults == -1 || numOfExpectedResults > numOfResults());
+        return !(numOfExpectedResults == -1 || numOfExpectedResults > results.size());
     }
 
     void setNumOfExpectedResults(int numOfExpectedResults) {
