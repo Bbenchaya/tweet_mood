@@ -39,4 +39,8 @@ class RequestStatus {
         }
         return sb.toString();
     }
+
+    void decrementExpectedResults() {
+        numOfExpectedResults--;
+    }
 }

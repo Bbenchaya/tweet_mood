@@ -26,6 +26,9 @@ import edu.stanford.nlp.rnn.RNNCoreAnnotations;
 import edu.stanford.nlp.sentiment.SentimentCoreAnnotations;
 import edu.stanford.nlp.trees.Tree;
 import edu.stanford.nlp.util.CoreMap;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.select.Elements;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -49,26 +52,12 @@ public class Worker {
     private static String resultsURL;
     private static AmazonS3 s3;
     private static AmazonSQS sqs;
+    private static int droppedLinks;
+    private static int successfulLinks;
 
     public static void main(String[] args) throws IOException {
-        // initialize local fields
-        sentimentProps = new Properties();
-        entityProps = new Properties();
-        sentimentProps.put("annotators", "tokenize, ssplit, parse, sentiment");
-        entityProps.put("annotators", "tokenize , ssplit, pos, lemma, ner");
-        sentimentPipeline = new StanfordCoreNLP(sentimentProps);
-        NERPipeline = new StanfordCoreNLP(entityProps);
+        init();
 
-        // initiate connection to S3
-        s3 = new AmazonS3Client();
-        Region usEast1 = Region.getRegion(Regions.US_EAST_1);
-        s3.setRegion(usEast1);
-
-        // initiate connection to SQS
-        sqs = new AmazonSQSClient();
-        sqs.setRegion(usEast1);
-
-        System.out.println("Worker running...");
 //        AWSCredentials credentials = null;
 //        try {
 //            credentials = new ProfileCredentialsProvider().getCredentials();
@@ -95,7 +84,7 @@ public class Worker {
         while (true) {
 //            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().get("ApproximateNumberOfMessages").equals("0")) {
             while ((receiveMessageResult = sqs.receiveMessage(jobsURL)).getMessages().isEmpty()) {
-                    try {
+                try {
                     sleep(1000);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
@@ -103,7 +92,7 @@ public class Worker {
             }
             List<Message> messages = receiveMessageResult.getMessages();
             // all incoming jobs have been processed, and the last 'job' is a termination message
-            if (messages.size() == 1 && messages.get(0).getBody().contains("terminate")) {
+            if (messages.size() == 1 && messages.get(0).getBody().contains("terminate")) {  // TODO  check if size()==1 is good
                 System.out.print("Termination message received, exiting... ");
                 // TODO send statistics in the results queue
                 Runtime rt = Runtime.getRuntime();
@@ -111,22 +100,69 @@ public class Worker {
                 break; // if the EC2 instance is still running, this would cause the Worker to end execution
             }
             for (Message message : messages) {
-                    // analyze the tweet, create the result message and place it in 'results' SQS
-                    String job = message.getBody();
-                    String id = job.substring(job.indexOf("<id>") + 4, job.indexOf("</id>"));
-                    String tweet = job.substring(job.indexOf("<content>") + 9, job.indexOf("</content>"));
-                    int sentiment = findSentiment(tweet);
-                System.out.println("Sentiment: " + sentiment);
-                    String entities = extractEntities(tweet);
-                System.out.println("Entities: " + entities);
-                    String result = resultAsString(id, tweet, sentiment, entities);
-                    sqs.sendMessage(resultsURL, result);
-                    String messageReceiptHandle = message.getReceiptHandle();
-//                    sqs.changeMessageVisibility(jobsURL, messageReceiptHandle, 0);
-                    sqs.deleteMessage(new DeleteMessageRequest(jobsURL, messageReceiptHandle));
+                // analyze the tweet, create the result message and place it in 'results' SQS
+                String job = message.getBody();
+                String id = job.substring(job.indexOf("<id>") + 4, job.indexOf("</id>"));
+                String link = job.substring(job.indexOf("<link>") + 6, job.indexOf("</link>"));
+                Document doc = null;
+                Elements content;
+                try {
+                    doc = Jsoup.connect(link).get();
+                } catch (Exception e) {
+//                                        e.printStackTrace();
+                    System.out.println("dropped link: " + link);
+                    droppedLinks++;
+                    sqs.sendMessage(resultsURL, droppedLinkMessage(id));
+                    continue;
                 }
+                successfulLinks++;
+                content = doc.select("title");
+                String tweet = content.text();
+                int sentiment = findSentiment(tweet);
+                System.out.println("Sentiment: " + sentiment);
+                String entities = extractEntities(tweet);
+                System.out.println("Entities: " + entities);
+                String result = resultAsString(id, tweet, sentiment, entities);
+                sqs.sendMessage(resultsURL, result);
+                String messageReceiptHandle = message.getReceiptHandle();
+//                    sqs.changeMessageVisibility(jobsURL, messageReceiptHandle, 0);
+                sqs.deleteMessage(new DeleteMessageRequest(jobsURL, messageReceiptHandle));
             }
-        System.out.println("Done.");
+//                    String tweet = job.substring(job.indexOf("<content>") + 9, job.indexOf("</content>"));
+
+        }
+        sqs.sendMessage(resultsURL, workerDeathMessage());
+    }
+
+    private static String droppedLinkMessage(String id) {
+        return "<dropped-link>" + id + "</dropped-link>";
+    }
+
+    private static String workerDeathMessage() {
+        return "<worker-stats><successful>" + successfulLinks + "</successful><dropped>" + droppedLinks + "</dropped></worker-stats>";
+    }
+
+    private static void init() {
+        // initialize local fields
+        sentimentProps = new Properties();
+        entityProps = new Properties();
+        sentimentProps.put("annotators", "tokenize, ssplit, parse, sentiment");
+        entityProps.put("annotators", "tokenize , ssplit, pos, lemma, ner");
+        sentimentPipeline = new StanfordCoreNLP(sentimentProps);
+        NERPipeline = new StanfordCoreNLP(entityProps);
+        droppedLinks = 0;
+        successfulLinks = 0;
+
+        // initiate connection to S3
+        s3 = new AmazonS3Client();
+        Region usEast1 = Region.getRegion(Regions.US_EAST_1);
+        s3.setRegion(usEast1);
+
+        // initiate connection to SQS
+        sqs = new AmazonSQSClient();
+        sqs.setRegion(usEast1);
+
+        System.out.println("Worker running...");
     }
 
     private static int findSentiment(String tweet) {

@@ -169,8 +169,8 @@ public class Local {
             // start a Manager instance
             try {
                 System.out.println("Firing up new Manager instance...");
-//                RunInstancesRequest request = new RunInstancesRequest("ami-08111162", 1, 1);
-                RunInstancesRequest request = new RunInstancesRequest("ami-37d0c45d", 1, 1);
+//                RunInstancesRequest request = new RunInstancesRequest("ami-08111162", 1, 1); // basic amazon AMI
+                RunInstancesRequest request = new RunInstancesRequest("ami-37d0c45d", 1, 1); // upgraded ami: yum updated, java 8
                 request.setInstanceType(InstanceType.T2Micro.toString());
                 request.setUserData(getUserDataScript());
                 IamInstanceProfileSpecification iamInstanceProfileSpecification = new IamInstanceProfileSpecification();
@@ -304,8 +304,8 @@ public class Local {
         StringBuilder sb = new StringBuilder();
         sb.append("#! /bin/bash\n");
         sb.append("cd /home/ec2-user\n");
-        sb.append("wget --no-check-certificate --no-cookies --header \"Cookie: oraclelicense=accept-securebackup-cookie\" http://download.oracle.com/otn-pub/java/jdk/8u73-b02/jdk-8u73-linux-x64.rpm\n");
-        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm\n");
+//        sb.append("wget --no-check-certificate --no-cookies --header \"Cookie: oraclelicense=accept-securebackup-cookie\" http://download.oracle.com/otn-pub/java/jdk/8u73-b02/jdk-8u73-linux-x64.rpm\n");
+//        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm\n");
         sb.append("aws s3 cp s3://asafbendsp/Manager.jar Manager.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/jsoup-1.8.3.jar jsoup-1.8.3.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/aws-sdk-java/lib . --recursive\n");

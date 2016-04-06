@@ -34,9 +34,11 @@ public class Manager {
     private static final String URLS_FILENAME = "up-down.txt";
     private static final String WORKER_QUEUES_FILENAME = "jobs-results.txt";
     private static final String RESULTS_FILENAME_SUFFIX = "results.txt";
+    private static final String WORKER_STATS_FILENAME = "worker-statistics.txt";
     private static int workersPerTweetsRatio;
     private static AtomicInteger numOfActiveWorkers;
     private static AtomicInteger pendingTweets;
+    private static List<String> workerStatistics;
     private static String upstreamURL;
     private static String downstreamURL;
     private static String jobsURL;
@@ -127,53 +129,43 @@ public class Manager {
                         S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, id + "links.txt"));
                         System.out.println("Done.");
                         // TODO much odd!!!
-                        final Scanner scanner = new Scanner(new InputStreamReader(object.getObjectContent()));
-                        BufferedReader br = new BufferedReader(new InputStreamReader(object.getObjectContent()));
+                        final BufferedReader br = new BufferedReader(new InputStreamReader(object.getObjectContent()));
                         final String finalId = id;
                         Thread getAndParseTweetLinksFile = new Thread() {
                             @Override
                             public void run() {
-                                System.out.println("Handling the request...");
-                                //download the tweets themselves and parse them
-                                Stack<String> links = new Stack<>();
-                                String link;
+                                System.out.println("Handling request for Local id: " + finalId);
+                                // count the number of links in the file in order to determinte the number of new workers that need to be raised
+                                List<String> links = new LinkedList<>();
+                                String link = null;
                                 int numOfTweets = 0;
-//                                while ((link = scanner.nextLine()) != null) {
                                 try {
                                     while ((link = br.readLine()) != null) {
-
-                                        links.push(link);
                                         numOfTweets++;
-                                        double calc = ((double) numOfTweets) / workersPerTweetsRatio - numOfActiveWorkers.get();
-                                        if (calc > 0) {
-                                            System.out.println("Creating new worker. Number of pending tweets: " + (pendingTweets.get() + numOfTweets));
-                                            // at this point, there's already in entry in 'requests' for the relevant request
-                                            Manager.createWorker();
-                                        }
+                                        links.add(link);
                                     }
                                 } catch (IOException e) {
                                     e.printStackTrace();
                                     System.out.println(Thread.currentThread().getName());
                                 }
-                                scanner.close();
+                                try {
+                                    br.close();
+                                } catch (IOException e) {
+                                    e.printStackTrace();
+                                }
+                                // create new Worker instances, if required
+                                int numOfNewWorkersToRaise =  (numOfTweets / workersPerTweetsRatio) - numOfActiveWorkers.get();
+                                for (int i = 0; i < numOfNewWorkersToRaise; i++) {
+                                    Manager.createWorker();
+                                }
+
+                                // parse the links from the file and create new jobs for the Workers
+                                for (String link2 : links) {
+                                    sqs.sendMessage(jobsURL, "<id>" + finalId + "</id><link>" + link2 + "</link>");
+                                }
                                 // TODO synchronize?
                                 requests.get(finalId).setNumOfExpectedResults(numOfTweets);
-                                Document doc = null;
-                                Elements content;
-                                System.out.print("Parsing " + numOfTweets + " tweets... ");
-                                for (String link2 : links) {
-                                    try {
-                                        doc = Jsoup.connect(link2).get();
-                                    } catch (Exception e) {
-                                        // TODO inc missed links counter
-//                                        e.printStackTrace();
-                                        System.out.println("dropped link: " + link2);
-                                    }
-                                    content = doc.select("title");
-                                    sqs.sendMessage(jobsURL, "<id>" + finalId + "</id><content>" + content.text() + "</content>");
-                                    pendingTweets.addAndGet(1);
-                                }
-                                System.out.println("Done.");
+                                System.out.println("Finished handling request for Local id: " + finalId);
                             }
                         };
                         getAndParseTweetLinksFile.start();
@@ -198,7 +190,7 @@ public class Manager {
                     while (it.hasNext()) {
                         Map.Entry<String, RequestStatus> keyValue = it.next();
                         if (keyValue.getValue().hasAllResults()) {
-                            System.out.println("Compiling results");
+                            System.out.println("Compiling results for Local id: " + keyValue.getKey());
                             Manager.compileAndSendResults(keyValue.getKey(), keyValue.getValue().getResults());
                             requests.remove(keyValue.getKey());
                         }
@@ -221,17 +213,33 @@ public class Manager {
                     ReceiveMessageResult receiveMessageResult = sqs.receiveMessage(resultsURL);
                     for (Message message : receiveMessageResult.getMessages()) {
                         String body = message.getBody();
-                        String id = body.substring(body.indexOf("<id>") + 4, body.indexOf("</id>"));
-                        String result = body.substring(body.indexOf("<tweet>"), body.length());
-                        // TODO synchronize?
-                        RequestStatus requestStatus = requests.get(id);
-                        if (requestStatus != null)
-                            requests.get(id).addResult(result);
-                        pendingTweets.addAndGet(-1);
-                        String messageReceiptHandle = message.getReceiptHandle();
-                        sqs.changeMessageVisibility(resultsURL, messageReceiptHandle, 0);
-                        sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
-                        System.out.println("Processed result: id: " + id + " result: " + result);
+                        if (body.contains("<worker-stats>")) {
+                            workerStatistics.add(body.substring(body.indexOf("<worker-stats>") + 14, body.indexOf("</worker-stats")));
+                            String messageReceiptHandle = message.getReceiptHandle();
+//                            sqs.changeMessageVisibility(resultsURL, messageReceiptHandle, 0);
+                            sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
+                        }
+                        else if (body.contains("<dropped-link>")) {
+                            RequestStatus tempRequest =  requests.get(body.substring(body.indexOf("<dropped-link>") + 14, body.indexOf("</dropped-link>")));
+                            if (tempRequest != null)
+                                tempRequest.decrementExpectedResults();
+                            String messageReceiptHandle = message.getReceiptHandle();
+//                            sqs.changeMessageVisibility(resultsURL, messageReceiptHandle, 0);
+                            sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
+                        }
+                        else {
+                            String id = body.substring(body.indexOf("<id>") + 4, body.indexOf("</id>"));
+                            String result = body.substring(body.indexOf("<tweet>"), body.length());
+                            // TODO synchronize?
+                            RequestStatus requestStatus = requests.get(id);
+                            if (requestStatus != null)
+                                requests.get(id).addResult(result);
+                            pendingTweets.addAndGet(-1);
+                            String messageReceiptHandle = message.getReceiptHandle();
+//                            sqs.changeMessageVisibility(resultsURL, messageReceiptHandle, 0);
+                            sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
+                            System.out.println("Processed result: id: " + id + " result: " + result);
+                        }
                     }
                     try {
                         sleep(500);
@@ -271,6 +279,7 @@ public class Manager {
     }
 
     private static void init() {
+        workerStatistics = new LinkedList<>();
         requests = new ConcurrentHashMap<>();
         alive = new AtomicBoolean();
         alive.set(true);
@@ -312,7 +321,7 @@ public class Manager {
         } catch (IOException e) {
             e.printStackTrace();
         }
-        System.out.print("Finished compiling results file, uploading to S3... ");
+        System.out.print("Finished compiling results file for Local id " + key + " , uploading to S3... ");
         s3.putObject(new PutObjectRequest(BUCKET_NAME, key + RESULTS_FILENAME_SUFFIX, file));
         System.out.println("Done.");
         sqs.sendMessage(downstreamURL, key + "done");
