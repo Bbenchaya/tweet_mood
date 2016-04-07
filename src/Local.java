@@ -37,7 +37,7 @@ public class Local {
     private static String outputFileName;
     private static String objectName;
     private static String id;
-    private static final String LINKS_FILENAME_SUFFIX = "links.txt"; // TODO before deployment change to 'links.txt'
+    private static final String LINKS_FILENAME_SUFFIX = "links.txt";
     private static final String HEADER = "<html>\n\t<head>\n\t\t<title>DSP 162, assignment 1</title>\n\t</head>\n\t<body>";
     private static final String FOOTER = "\n\t</body>\n</html>";
     private static boolean managerShouldTerminate;

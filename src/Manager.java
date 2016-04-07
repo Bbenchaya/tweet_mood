@@ -111,7 +111,6 @@ public class Manager {
                     }
                     if (!receiveMessageResult.toString().contains("terminate")) { // there's no termination message in the UPSTREAM queue
                         List<Message> messages = receiveMessageResult.getMessages();
-                        // TODO check if necessary, maybe switch to messages.getMessages().get(0)
                         for (Message message : messages) {
                             if (message.getBody().contains("links.txt")) {
                                 id = message.getBody().substring(0, message.getBody().indexOf("links.txt"));
@@ -130,7 +129,6 @@ public class Manager {
                         System.out.format("Downloading tweet links file from S3: %s... ", id + "links.txt");
                         S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, id + "links.txt"));
                         System.out.println("Done.");
-                        // TODO much odd!!!
                         final BufferedReader br = new BufferedReader(new InputStreamReader(object.getObjectContent()));
                         final String finalId = id;
 
@@ -198,7 +196,7 @@ public class Manager {
             @Override
             public void run() {
                 while (!Manager.shouldTerminate()) {
-                    // TODO synchronize?
+                    // NOTE: access to a concurrent hashmap via entry set is thread-safe
                     for (Map.Entry<String, RequestStatus> keyValue : requests.entrySet()) {
                         if (keyValue.getValue().hasAllResults()) {
                             System.out.println("Compiling results for Local id: " + keyValue.getKey());
@@ -212,15 +210,58 @@ public class Manager {
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
-                    // The Manager should end execution
-//                    if (requests.isEmpty() && Manager.shouldTerminate())
-//                        System.out.println("All requests have been processed, and all result files have been uploaded to S3.");
-//                        break;
                 }
                 System.out.println("All requests have been processed, and all result files have been uploaded to S3.");
             }
         };
         compileResults.start();
+
+        Thread raiseRedundantWorkers = new Thread() {
+            @Override
+            public void run() {
+                while (!firstWorkerRunning.get()) {
+                    try {
+                        sleep(1000);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+                List<String> tagValues = new ArrayList<>();
+                tagValues.add("worker");
+                Filter tagFilter = new Filter("tag:kind", tagValues);
+                List<String> statusValues = new ArrayList<>();
+                statusValues.add("running");
+                statusValues.add("pending");
+                Filter statusFilter = new Filter("instance-state-name", statusValues);
+                List<Reservation> reservations;
+                DescribeInstancesResult filteredInstances;
+                DescribeInstancesRequest describeInstancesRequest = new DescribeInstancesRequest().withFilters(tagFilter, statusFilter);
+                while (!shouldTerminate()) {
+                    filteredInstances = ec2.describeInstances(describeInstancesRequest);
+                    reservations = filteredInstances.getReservations();
+                    if (reservations.isEmpty() && pendingTweets.get() > 0) {
+                        int numOfMissingWorkers = pendingTweets.get() / workersPerTweetsRatio + 1;
+                        System.out.println("Worker instances have unexpectedly stopped. No. of missing workers: " + numOfMissingWorkers);
+                        System.out.println("Launching replacement instances...");
+                        for (int i = 0; i < numOfMissingWorkers && firstWorkerRunning.get(); i++) {
+                            Manager.createWorker();
+                        }
+                        try {
+                            sleep(5000);
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        }
+                        System.out.println("Finished launching replacement instances.");
+                    }
+                    try {
+                        sleep(30000);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        };
+        raiseRedundantWorkers.start();
 
         // await and processes results
         while (!(firstRequestReceived && requests.isEmpty() && pendingTweets.get() == 0 && !Manager.shouldTerminate())) {
@@ -261,37 +302,6 @@ public class Manager {
         }
 
         shouldTerminate.set(true);
-
-//        Thread raiseRedundantWorkers = new Thread() {
-//            @Override
-//            public void run() {
-//                List<String> tagValues = new ArrayList<>();
-//                tagValues.add("worker");
-//                Filter tagFilter = new Filter("tag:kind", tagValues);
-//                List<String> statusValues = new ArrayList<>();
-//                statusValues.add("running");
-//                Filter statusFilter = new Filter("instance-state-name", statusValues);
-//                List<Reservation> reservations;
-//                DescribeInstancesResult filteredInstances;
-//                DescribeInstancesRequest describeInstancesRequest = new DescribeInstancesRequest().withFilters(tagFilter, statusFilter);
-//                do {
-//                    filteredInstances = ec2.describeInstances(describeInstancesRequest);
-//                    reservations= filteredInstances.getReservations();
-//                    {
-//                        int numOfMissingWorkers = numOfActiveWorkers.get() - reservations.size();
-//                        for (int i = 0; i < numOfMissingWorkers && firstWorkerRunning.get(); i++) {
-//                            Manager.createWorker();
-//                        }
-//                        try {
-//                            sleep(30000);
-//                        } catch (InterruptedException e) {
-//                            e.printStackTrace();
-//                        }
-//                    }
-//                } while (!shouldTerminate() && firstRequestReceived && numOfActiveWorkers.get() > reservations.size());
-//            }
-//        };
-//        raiseRedundantWorkers.start();
 
         compileWorkerStatistics();
         pool.shutdownNow();
@@ -390,14 +400,7 @@ public class Manager {
             CreateTagsRequest createTagRequest = new CreateTagsRequest();
             createTagRequest.withResources(instances.get(0).getInstanceId()).withTags(new Tag("kind", "worker"));
             ec2.createTags(createTagRequest);
-            // the synchronization looks redundant, but using atomics makes the code easier in 2 other places
             numOfActiveWorkers.incrementAndGet();
-//            synchronized (numOfActiveWorkers) {
-//                if (numOfActiveWorkers.get() == -1)
-//                    numOfActiveWorkers.set(1);
-//                else
-//                    numOfActiveWorkers.addAndGet(1);
-//            }
 
             /*
             Wait for the first Worker instance to run. This is important - if there are pending tweets, but all Worker
@@ -415,15 +418,15 @@ public class Manager {
                 DescribeInstancesRequest describeInstancesRequest = new DescribeInstancesRequest().withFilters(tagFilter, statusFilter);
                 DescribeInstancesResult filteredInstances;
                 List<Reservation> reservations;
-//                do {
-//                    filteredInstances = ec2.describeInstances(describeInstancesRequest);
-//                    reservations = filteredInstances.getReservations();
-//                    try {
-//                        sleep(250);
-//                    } catch (InterruptedException e) {
-//                        e.printStackTrace();
-//                    }
-//                } while (reservations.isEmpty());
+                do {
+                    filteredInstances = ec2.describeInstances(describeInstancesRequest);
+                    reservations = filteredInstances.getReservations();
+                    try {
+                        sleep(1000);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                } while (reservations.isEmpty());
                 firstWorkerRunning.set(true);
                 System.out.println("First worker running.");
             }

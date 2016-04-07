@@ -80,7 +80,7 @@ public class Worker {
             }
             List<Message> messages = receiveMessageResult.getMessages();
             // all incoming jobs have been processed, and the last 'job' is a termination message
-            if (messages.size() == 1 && messages.get(0).getBody().contains("terminate")) {  // TODO  check if size()==1 is good
+            if (messages.size() == 1 && messages.get(0).getBody().contains("terminate")) {
                 System.out.print("Termination message received, exiting... ");
                 Runtime rt = Runtime.getRuntime();
                 Process pr = rt.exec("shutdown -h now"); // sends a kill message to the EC2 instance
