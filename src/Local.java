@@ -61,9 +61,6 @@ public class Local {
         id = UUID.randomUUID().toString();
         System.out.println("Local instance id: " + id);
         objectName = id + LINKS_FILENAME_SUFFIX;
-//        for (String arg : args)
-//            System.out.println(arg);
-//        System.out.println(managerShouldTerminate);
 
         //upload the tweet links list to S3
         s3 = new AmazonS3Client();
@@ -217,7 +214,6 @@ public class Local {
         ReceiveMessageResult receiveMessageResult;
         System.out.println("Awaiting results...");
         while (true) {
-//            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().get("ApproximateNumberOfMessages").equals("0")) {
             while ((receiveMessageResult = sqs.receiveMessage(downstreamURL)).getMessages().isEmpty()) {
                 try {
                     sleep(1000);
@@ -225,14 +221,10 @@ public class Local {
                     e.printStackTrace();
                 }
             }
-//            if (receiveMessageResult.toString().contains(id + "done")) {
                 if (receiveMessageResult.toString().contains("done")) {
-
                     List<Message> messages = receiveMessageResult.getMessages();
                 for (Message message : messages) {
-//                    if (message.getBody().contains(id + "done")) {
                         if (message.getBody().contains("done")) {
-
                         String messageReceiptHandle = message.getReceiptHandle();
                         sqs.changeMessageVisibility(downstreamURL, messageReceiptHandle, 0);
                         sqs.deleteMessage(new DeleteMessageRequest(downstreamURL, messageReceiptHandle));
@@ -255,7 +247,6 @@ public class Local {
         System.out.println("Compiling the results to HTML. Output path: " + System.getProperty("user.dir") + "/" + outputFileName);
         while (scanner.hasNext()) {
             String result = scanner.next();
-//            System.out.println(result);
             // handle the tail after the last delimiter
             if (result.equals("</result>\n"))
                 break;
@@ -307,11 +298,10 @@ public class Local {
     private static String getUserDataScript(){
         StringBuilder sb = new StringBuilder();
         sb.append("#! /bin/bash\n");
-        sb.append("cd /home/ec2-user\n");
+//        sb.append("cd /home/ec2-user\n");
 //        sb.append("wget --no-check-certificate --no-cookies --header \"Cookie: oraclelicense=accept-securebackup-cookie\" http://download.oracle.com/otn-pub/java/jdk/8u73-b02/jdk-8u73-linux-x64.rpm\n");
 //        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm\n");
         sb.append("aws s3 cp s3://asafbendsp/Manager.jar Manager.jar\n");
-        sb.append("aws s3 cp s3://asafbendsp/jsoup-1.8.3.jar jsoup-1.8.3.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/aws-sdk-java/lib . --recursive\n");
         sb.append("aws s3 cp s3://asafbendsp/aws-sdk-java/thirdparty/lib . --recursive\n");
         sb.append("jar xf Manager.jar\n");

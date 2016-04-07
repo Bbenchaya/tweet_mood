@@ -17,6 +17,8 @@ import org.apache.commons.codec.binary.Base64;
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -31,6 +33,7 @@ public class Manager {
     private static final String WORKER_QUEUES_FILENAME = "jobs-results.txt";
     private static final String RESULTS_FILENAME_SUFFIX = "results.txt";
     private static final String WORKER_STATS_FILENAME = "worker-statistics.txt";
+    private static final int THREAD_POOL_SIZE = 10;
     private static int workersPerTweetsRatio;
     private static AtomicInteger numOfActiveWorkers;
     private static AtomicInteger pendingTweets;
@@ -47,17 +50,18 @@ public class Manager {
     private static AmazonSQS sqs;
     private static ConcurrentHashMap<String, RequestStatus> requests;
     private static HashMap<String, WorkerStatistics> workerStatistics;
+    private static ExecutorService pool;
 
     private static boolean shouldTerminate() {
         return shouldTerminate.get();
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException, InterruptedException {
 
         init();
 
         // get the  SQS URLs file from S3
-        System.out.print("Downloading URLs file from S3... ");
+        System.out.print("Downloading upstream\\downstream queues' URLs file from S3... ");
         S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, URLS_FILENAME));
         System.out.println("Done.");
         BufferedReader br = new BufferedReader(new InputStreamReader(object.getObjectContent()));
@@ -100,7 +104,7 @@ public class Manager {
                     String id = null;
                     while ((receiveMessageResult = sqs.receiveMessage(upstreamURL)).getMessages().isEmpty()) {
                         try {
-                            sleep(1000);
+                            sleep(250);
                         } catch (InterruptedException e) {
                             e.printStackTrace();
                         }
@@ -114,7 +118,7 @@ public class Manager {
                                 // create an entry that will hold the results of the request
                                 requests.put(id, new RequestStatus());
                                 String messageReceiptHandle = message.getReceiptHandle();
-                                sqs.changeMessageVisibility(upstreamURL, messageReceiptHandle, 0);
+//                                sqs.changeMessageVisibility(upstreamURL, messageReceiptHandle, 0);
                                 sqs.deleteMessage(new DeleteMessageRequest(upstreamURL, messageReceiptHandle));
                                 break;
                             }
@@ -129,6 +133,7 @@ public class Manager {
                         // TODO much odd!!!
                         final BufferedReader br = new BufferedReader(new InputStreamReader(object.getObjectContent()));
                         final String finalId = id;
+
                         Thread getAndParseTweetLinksFile = new Thread() {
                             @Override
                             public void run() {
@@ -151,6 +156,7 @@ public class Manager {
                                 } catch (IOException e) {
                                     e.printStackTrace();
                                 }
+
                                 // create new Worker instances, if required
                                 int numOfNewWorkersToRaise =  (numOfTweets / workersPerTweetsRatio) - numOfActiveWorkers.get();
                                 for (int i = 0; i < numOfNewWorkersToRaise; i++) {
@@ -160,14 +166,15 @@ public class Manager {
                                 // parse the links from the file and create new jobs for the Workers
                                 for (String link2 : links) {
                                     sqs.sendMessage(jobsURL, "<id>" + finalId + "</id><link>" + link2 + "</link>");
-                                    pendingTweets.addAndGet(1);
+                                    pendingTweets.incrementAndGet();
                                 }
                                 requests.get(finalId).setNumOfExpectedResults(numOfTweets);
                                 firstRequestReceived = true;
-                                System.out.println("Finished handling request for Local id: " + finalId);
+                                System.out.println("Finished distributing jobs in response to request from Local id: " + finalId);
                             }
                         };
-                        getAndParseTweetLinksFile.start();
+                        pool.submit(getAndParseTweetLinksFile);
+//                        getAndParseTweetLinksFile.start();
                     }
                     else {  // termination message received in UPSTREAM queue
                         shouldProcessRequests.set(false);
@@ -175,6 +182,8 @@ public class Manager {
 //                        String messageReceiptHandle = message.getReceiptHandle();
 //                        sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
 //                        sqs.purgeQueue(new PurgeQueueRequest(upstreamURL));
+                        System.out.println("Termination message received from Local id: " + id);
+                        System.out.println("Incoming requests will be ignored from now, Manager is still waiting for results for previous requests.");
                         sqs.deleteQueue(upstreamURL);
                     }
                 }
@@ -188,40 +197,42 @@ public class Manager {
         Thread compileResults = new Thread() {
             @Override
             public void run() {
-                while (Manager.shouldTerminate()) {
+                while (!Manager.shouldTerminate()) {
                     // TODO synchronize?
-                    Iterator<Map.Entry<String, RequestStatus>> it = requests.entrySet().iterator();
-                    while (it.hasNext()) {
-                        Map.Entry<String, RequestStatus> keyValue = it.next();
+                    for (Map.Entry<String, RequestStatus> keyValue : requests.entrySet()) {
                         if (keyValue.getValue().hasAllResults()) {
                             System.out.println("Compiling results for Local id: " + keyValue.getKey());
                             Manager.compileAndSendResults(keyValue.getKey(), keyValue.getValue().getResults());
                             requests.remove(keyValue.getKey());
+                            System.out.println("Finished compiling results for Local id: " + keyValue.getKey());
                         }
                     }
                     try {
-                        sleep(1000);
+                        sleep(250);
                     } catch (InterruptedException e) {
                         e.printStackTrace();
                     }
-                    if (requests.isEmpty() && firstRequestReceived)
-                        break;
+                    // The Manager should end execution
+//                    if (requests.isEmpty() && Manager.shouldTerminate())
+//                        System.out.println("All requests have been processed, and all result files have been uploaded to S3.");
+//                        break;
                 }
+                System.out.println("All requests have been processed, and all result files have been uploaded to S3.");
             }
         };
         compileResults.start();
 
         // await and processes results
-        while (!(firstRequestReceived && requests.isEmpty() && pendingTweets.get() == 0 && Manager.shouldTerminate())) {
+        while (!(firstRequestReceived && requests.isEmpty() && pendingTweets.get() == 0 && !Manager.shouldTerminate())) {
             ReceiveMessageResult receiveMessageResult = sqs.receiveMessage(resultsURL);
             for (Message message : receiveMessageResult.getMessages()) {
                 String body = message.getBody();
                 String workerId = body.substring(body.indexOf("<worker-id>") + 11, body.indexOf("</worker-id>"));
                 workerStatistics.putIfAbsent(workerId, new WorkerStatistics());
                 if (body.contains("<dropped-link>")) {
-                    RequestStatus tempRequest =  requests.get(body.substring(body.indexOf("<dropped-link>") + 14, body.indexOf("</dropped-link>")));
-                    if (tempRequest != null)
-                        tempRequest.decrementExpectedResults();
+                    System.out.println("dropped link");
+                    String requestId = body.substring(body.indexOf("<local-id>") + 10, body.indexOf("</local-id>"));
+                    requests.get(requestId).decrementExpectedResults();
                     String messageReceiptHandle = message.getReceiptHandle();
 //                            sqs.changeMessageVisibility(resultsURL, messageReceiptHandle, 0);
                     sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
@@ -243,11 +254,13 @@ public class Manager {
                 }
             }
             try {
-                sleep(500);
+                sleep(250);
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
         }
+
+        shouldTerminate.set(true);
 
 //        Thread raiseRedundantWorkers = new Thread() {
 //            @Override
@@ -280,43 +293,39 @@ public class Manager {
 //        };
 //        raiseRedundantWorkers.start();
 
-        if (numOfActiveWorkers.get() > 0) {
-            // TODO handle pending results
-        }
-
-        // compile Worker statistics
         compileWorkerStatistics();
-
+        pool.shutdownNow();
         System.out.println("Manager has finished execution, exiting...");
 
     }
 
     private static void compileWorkerStatistics() throws IOException {
-        // TODO the Manager should maintain all stats in a hash table: assign each worker a UUID, and append it to results/dropped link message
         System.out.print("Compiling worker statistics... ");
-        File statsFile = new File("worker-statistics.txt");
+        File statsFile = new File(WORKER_STATS_FILENAME);
         FileWriter fw = new FileWriter(statsFile);
-        int num = 1;
         for (Map.Entry<String, WorkerStatistics> stats : workerStatistics.entrySet()) {
             int successful = stats.getValue().getSuccessful();
             int dropped = stats.getValue().getDropped();
             String workerId = stats.getKey();
-            fw.write("Worker id. " + workerId + ", total: " + (successful+dropped) + ", successful: " + successful + ", dropped: " + dropped);
-            num++;
+            fw.write("Worker - \n");
+            fw.write("\t\t\tid: " + workerId + "\n");
+            fw.write("\t\t\ttotal links processed: " + (successful + dropped) + "\n");
+            fw.write("\t\t\tdropped links: " + dropped + "\n");
+            fw.write("\t\t\tsuccessful links: " + successful + "\n\n\n");
             fw.flush();
         }
         fw.close();
-        System.out.println("Done.");
-        System.out.print("Uploading worker statistics to S3... ");
+        System.out.println("Finished compiling worker statistics summary.");
+        System.out.println("Uploading worker statistics summary to S3...");
         s3.putObject(new PutObjectRequest(BUCKET_NAME, WORKER_STATS_FILENAME, statsFile));
-        System.out.println("Done.");
+        System.out.println("Finished uploading worker statistics file to S3.");
     }
 
     private static void init() {
         workerStatistics = new HashMap<>();
         requests = new ConcurrentHashMap<>();
         shouldTerminate = new AtomicBoolean();
-        shouldTerminate.set(true);
+        shouldTerminate.set(false);
         shouldProcessRequests = new AtomicBoolean();
         shouldProcessRequests.set(true);
         numOfActiveWorkers = new AtomicInteger();
@@ -326,6 +335,7 @@ public class Manager {
         firstRequestReceived = false;
         firstWorkerRunning = new AtomicBoolean();
         firstWorkerRunning.set(false);
+        pool = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
 
         // initiate connection to S3
         s3 = new AmazonS3Client();
@@ -361,7 +371,7 @@ public class Manager {
         }
         System.out.print("Finished compiling results file for Local id " + key + " , uploading to S3... ");
         s3.putObject(new PutObjectRequest(BUCKET_NAME, key + RESULTS_FILENAME_SUFFIX, file));
-        System.out.println("Done.");
+        System.out.println("Finished uploading to S3 the results file for Local id: " + key);
         sqs.sendMessage(downstreamURL, key + "done");
     }
 
@@ -395,7 +405,7 @@ public class Manager {
             the pending jobs.
              */
             if (!firstWorkerRunning.get()){
-                System.out.print("Waiting for the first worker to run... ");
+                System.out.println("Waiting for the first worker to run...");
                 List<String> tagValues = new ArrayList<>();
                 tagValues.add("worker");
                 Filter tagFilter = new Filter("tag:kind", tagValues);
@@ -409,13 +419,13 @@ public class Manager {
 //                    filteredInstances = ec2.describeInstances(describeInstancesRequest);
 //                    reservations = filteredInstances.getReservations();
 //                    try {
-//                        sleep(1000);
+//                        sleep(250);
 //                    } catch (InterruptedException e) {
 //                        e.printStackTrace();
 //                    }
 //                } while (reservations.isEmpty());
                 firstWorkerRunning.set(true);
-                System.out.println("Done.");
+                System.out.println("First worker running.");
             }
         } catch (AmazonServiceException ase) {
             System.out.println("Caught Exception: " + ase.getMessage());
@@ -428,14 +438,15 @@ public class Manager {
     private static String getUserDataScript(){
         StringBuilder sb = new StringBuilder();
         sb.append("#! /bin/bash\n");
-        sb.append("cd /home/ec2-user\n");
+//        sb.append("cd /home/ec2-user\n");
+        sb.append("aws s3 cp s3://asafbendsp/jsoup-1.8.3.jar jsoup-1.8.3.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/ejml-0.23.jar ejml-0.23.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/jollyday-0.4.7.jar jollyday-0.4.7.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0-models.jar stanford-corenlp-3.3.0-models.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0.jar stanford-corenlp-3.3.0.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/Worker.jar Worker.jar\n");
-        sb.append("wget --no-check-certificate --no-cookies --header \"Cookie: oraclelicense=accept-securebackup-cookie\" http://download.oracle.com/otn-pub/java/jdk/8u73-b02/jdk-8u73-linux-x64.rpm\n");
-        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm\n");
+//        sb.append("wget --no-check-certificate --no-cookies --header \"Cookie: oraclelicense=accept-securebackup-cookie\" http://download.oracle.com/otn-pub/java/jdk/8u73-b02/jdk-8u73-linux-x64.rpm\n");
+//        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm\n");
         sb.append("jar xf Worker.jar\n");
         sb.append("java -cp .:./* Worker\n");
         // AWS requires that user data be encoded in base-64

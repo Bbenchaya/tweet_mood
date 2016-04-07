@@ -53,23 +53,11 @@ public class Worker {
     private static String resultsURL;
     private static AmazonS3 s3;
     private static AmazonSQS sqs;
-    private static int droppedLinks;
-    private static int successfulLinks;
     private static String id;
 
     public static void main(String[] args) throws IOException {
-        init();
 
-//        AWSCredentials credentials = null;
-//        try {
-//            credentials = new ProfileCredentialsProvider().getCredentials();
-//        } catch (Exception e) {
-//            throw new AmazonClientException(
-//                    "Cannot load the credentials from the credential profiles file. " +
-//                            "Please make sure that your credentials file is at the correct " +
-//                            "location (~/.aws/credentials), and is in valid format.",
-//                    e);
-//        }
+        init();
 
         // get the  SQS URLs file from S3
         System.out.print("Downloading jobs/results queues' URLs file from S3... ");
@@ -81,10 +69,8 @@ public class Worker {
         br.close();
 
         // work on the tweets and add the result to an SQS
-        GetQueueAttributesRequest getQueueAttributesRequest = new GetQueueAttributesRequest(jobsURL);
         ReceiveMessageResult receiveMessageResult;
         while (true) {
-//            while (sqs.getQueueAttributes(getQueueAttributesRequest).getAttributes().get("ApproximateNumberOfMessages").equals("0")) {
             while ((receiveMessageResult = sqs.receiveMessage(jobsURL)).getMessages().isEmpty()) {
                 try {
                     sleep(1000);
@@ -96,7 +82,6 @@ public class Worker {
             // all incoming jobs have been processed, and the last 'job' is a termination message
             if (messages.size() == 1 && messages.get(0).getBody().contains("terminate")) {  // TODO  check if size()==1 is good
                 System.out.print("Termination message received, exiting... ");
-                // TODO send statistics in the results queue
                 Runtime rt = Runtime.getRuntime();
                 Process pr = rt.exec("shutdown -h now"); // sends a kill message to the EC2 instance
                 break; // if the EC2 instance is still running, this would cause the Worker to end execution
@@ -111,13 +96,13 @@ public class Worker {
                 try {
                     doc = Jsoup.connect(link).get();
                 } catch (Exception e) {
-//                                        e.printStackTrace();
-                    System.out.println("dropped link: " + link);
-                    droppedLinks++;
+                    System.out.println("Dropped link: " + link);
                     sqs.sendMessage(resultsURL, droppedLinkMessage(localClientId));
+                    String messageReceiptHandle = message.getReceiptHandle();
+//                    sqs.changeMessageVisibility(jobsURL, messageReceiptHandle, 0);
+                    sqs.deleteMessage(new DeleteMessageRequest(jobsURL, messageReceiptHandle));
                     continue;
                 }
-                successfulLinks++;
                 content = doc.select("title");
                 String tweet = content.text();
                 int sentiment = findSentiment(tweet);
@@ -145,8 +130,6 @@ public class Worker {
         entityProps.put("annotators", "tokenize , ssplit, pos, lemma, ner");
         sentimentPipeline = new StanfordCoreNLP(sentimentProps);
         NERPipeline = new StanfordCoreNLP(entityProps);
-        droppedLinks = 0;
-        successfulLinks = 0;
         id = UUID.randomUUID().toString();
 
         // initiate connection to S3
