@@ -27,8 +27,6 @@ import java.util.*;
 import static java.lang.Thread.sleep;
 import static javafx.application.Platform.exit;
 
-// TODO extract the different code sections to methods
-
 public class Local {
 
     private static final String BUCKET_NAME = "asafbendsp";
@@ -69,8 +67,7 @@ public class Local {
         System.out.println("Local client running...");
         try {
             System.out.print("Uploading the tweet links file to S3... ");
-             File file = new File(System.getProperty("user.dir") + "/" + inputFileName);
-//            File file = new File(inputFileName);
+            File file = new File(System.getProperty("user.dir") + "/" + inputFileName);
             s3.putObject(new PutObjectRequest(BUCKET_NAME, objectName, file));
             System.out.println("Done.");
         } catch (AmazonServiceException ase) {
@@ -139,7 +136,6 @@ public class Local {
 
                 // create a file that holds the queues' URLs, and upload it to S3 for the manager
                 File file = new File(System.getProperty("user.dir") + "/" + URLS_FILENAME);
-//                File file = new File(URLS_FILENAME);
                 FileWriter fw = new FileWriter(file);
                 fw.write(upstreamURL + "\n");
                 fw.write(downstreamURL + "\n");
@@ -166,7 +162,6 @@ public class Local {
             // start a Manager instance
             try {
                 System.out.println("Firing up new Manager instance...");
-//                RunInstancesRequest request = new RunInstancesRequest("ami-08111162", 1, 1); // basic amazon AMI
                 RunInstancesRequest request = new RunInstancesRequest("ami-37d0c45d", 1, 1); // upgraded ami: yum updated, java 8
                 request.setInstanceType(InstanceType.T2Micro.toString());
                 request.setUserData(getUserDataScript());
@@ -221,10 +216,10 @@ public class Local {
                     e.printStackTrace();
                 }
             }
-                if (receiveMessageResult.toString().contains("done")) {
-                    List<Message> messages = receiveMessageResult.getMessages();
+            if (receiveMessageResult.toString().contains("done")) {
+                List<Message> messages = receiveMessageResult.getMessages();
                 for (Message message : messages) {
-                        if (message.getBody().contains("done")) {
+                    if (message.getBody().contains("done")) {
                         String messageReceiptHandle = message.getReceiptHandle();
                         sqs.changeMessageVisibility(downstreamURL, messageReceiptHandle, 0);
                         sqs.deleteMessage(new DeleteMessageRequest(downstreamURL, messageReceiptHandle));
@@ -298,14 +293,11 @@ public class Local {
     private static String getUserDataScript(){
         StringBuilder sb = new StringBuilder();
         sb.append("#! /bin/bash\n");
-//        sb.append("cd /home/ec2-user\n");
-//        sb.append("wget --no-check-certificate --no-cookies --header \"Cookie: oraclelicense=accept-securebackup-cookie\" http://download.oracle.com/otn-pub/java/jdk/8u73-b02/jdk-8u73-linux-x64.rpm\n");
-//        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm\n");
         sb.append("aws s3 cp s3://asafbendsp/Manager.jar Manager.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/aws-sdk-java/lib . --recursive\n");
         sb.append("aws s3 cp s3://asafbendsp/aws-sdk-java/thirdparty/lib . --recursive\n");
         sb.append("jar xf Manager.jar\n");
-        sb.append("java -cp .:./* Manager\n");
+        sb.append("java -cp .:./* -Xms128m -Xmx768m Manager\n");
         // AWS requires that user data be encoded in base-64
         String str = null;
         try {

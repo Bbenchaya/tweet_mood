@@ -24,8 +24,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static java.lang.Thread.sleep;
 
-// TODO extract the different code sections to methods
-
 public class Manager {
 
     private static final String BUCKET_NAME = "asafbendsp";
@@ -117,7 +115,6 @@ public class Manager {
                                 // create an entry that will hold the results of the request
                                 requests.put(id, new RequestStatus());
                                 String messageReceiptHandle = message.getReceiptHandle();
-//                                sqs.changeMessageVisibility(upstreamURL, messageReceiptHandle, 0);
                                 sqs.deleteMessage(new DeleteMessageRequest(upstreamURL, messageReceiptHandle));
                                 break;
                             }
@@ -172,17 +169,12 @@ public class Manager {
                             }
                         };
                         pool.submit(getAndParseTweetLinksFile);
-//                        getAndParseTweetLinksFile.start();
                     }
                     else {  // termination message received in UPSTREAM queue
                         shouldProcessRequests.set(false);
                         sqs.sendMessage(jobsURL, "terminate");
-//                        String messageReceiptHandle = message.getReceiptHandle();
-//                        sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
-//                        sqs.purgeQueue(new PurgeQueueRequest(upstreamURL));
                         System.out.println("Termination message received from Local id: " + id);
                         System.out.println("Incoming requests will be ignored from now, Manager is still waiting for results for previous requests.");
-                        sqs.deleteQueue(upstreamURL);
                     }
                 }
             }
@@ -275,7 +267,6 @@ public class Manager {
                     String requestId = body.substring(body.indexOf("<local-id>") + 10, body.indexOf("</local-id>"));
                     requests.get(requestId).decrementExpectedResults();
                     String messageReceiptHandle = message.getReceiptHandle();
-//                            sqs.changeMessageVisibility(resultsURL, messageReceiptHandle, 0);
                     sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
                     pendingTweets.decrementAndGet();
                     workerStatistics.get(workerId).addDropped();
@@ -287,9 +278,8 @@ public class Manager {
                     if (requestStatus != null)
                         requests.get(id).addResult(result);
                     String messageReceiptHandle = message.getReceiptHandle();
-//                            sqs.changeMessageVisibility(resultsURL, messageReceiptHandle, 0);
                     sqs.deleteMessage(new DeleteMessageRequest(resultsURL, messageReceiptHandle));
-                    System.out.println("Processed result: id: " + id + " result: " + result);
+//                    System.out.println("Processed result: id: " + id + " result: " + result);
                     pendingTweets.decrementAndGet();
                     workerStatistics.get(workerId).addSuccessful();
                 }
@@ -304,8 +294,11 @@ public class Manager {
         shouldTerminate.set(true);
 
         compileWorkerStatistics();
+
         pool.shutdownNow();
         System.out.println("Manager has finished execution, exiting...");
+        Runtime rt = Runtime.getRuntime();
+        Process pr = rt.exec("shutdown -h now"); // sends a kill message to the EC2 instance
 
     }
 
@@ -441,17 +434,16 @@ public class Manager {
     private static String getUserDataScript(){
         StringBuilder sb = new StringBuilder();
         sb.append("#! /bin/bash\n");
-//        sb.append("cd /home/ec2-user\n");
         sb.append("aws s3 cp s3://asafbendsp/jsoup-1.8.3.jar jsoup-1.8.3.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/ejml-0.23.jar ejml-0.23.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/jollyday-0.4.7.jar jollyday-0.4.7.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0-models.jar stanford-corenlp-3.3.0-models.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/stanford-corenlp-3.3.0.jar stanford-corenlp-3.3.0.jar\n");
         sb.append("aws s3 cp s3://asafbendsp/Worker.jar Worker.jar\n");
-//        sb.append("wget --no-check-certificate --no-cookies --header \"Cookie: oraclelicense=accept-securebackup-cookie\" http://download.oracle.com/otn-pub/java/jdk/8u73-b02/jdk-8u73-linux-x64.rpm\n");
-//        sb.append("sudo rpm -i jdk-8u73-linux-x64.rpm\n");
+        sb.append("aws s3 cp s3://asafbendsp/aws-sdk-java/lib . --recursive\n");
+        sb.append("aws s3 cp s3://asafbendsp/aws-sdk-java/thirdparty/lib . --recursive\n");
         sb.append("jar xf Worker.jar\n");
-        sb.append("java -cp .:./* Worker\n");
+        sb.append("java -cp .:./* -Xms128m -Xmx768m Worker\n");
         // AWS requires that user data be encoded in base-64
         String str = null;
         try {

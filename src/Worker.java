@@ -11,7 +11,6 @@ import com.amazonaws.services.s3.model.S3Object;
 import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClient;
 import com.amazonaws.services.sqs.model.DeleteMessageRequest;
-import com.amazonaws.services.sqs.model.GetQueueAttributesRequest;
 import com.amazonaws.services.sqs.model.Message;
 import com.amazonaws.services.sqs.model.ReceiveMessageResult;
 import edu.stanford.nlp.ling.CoreAnnotations;
@@ -38,8 +37,6 @@ import java.util.Properties;
 import java.util.UUID;
 
 import static java.lang.Thread.sleep;
-
-// TODO extract the different code sections to methods
 
 public class Worker {
 
@@ -81,7 +78,7 @@ public class Worker {
             List<Message> messages = receiveMessageResult.getMessages();
             // all incoming jobs have been processed, and the last 'job' is a termination message
             if (messages.size() == 1 && messages.get(0).getBody().contains("terminate")) {
-                System.out.print("Termination message received, exiting... ");
+                System.out.println("Termination message received, exiting...");
                 Runtime rt = Runtime.getRuntime();
                 Process pr = rt.exec("shutdown -h now"); // sends a kill message to the EC2 instance
                 break; // if the EC2 instance is still running, this would cause the Worker to end execution
@@ -99,7 +96,6 @@ public class Worker {
                     System.out.println("Dropped link: " + link);
                     sqs.sendMessage(resultsURL, droppedLinkMessage(localClientId));
                     String messageReceiptHandle = message.getReceiptHandle();
-//                    sqs.changeMessageVisibility(jobsURL, messageReceiptHandle, 0);
                     sqs.deleteMessage(new DeleteMessageRequest(jobsURL, messageReceiptHandle));
                     continue;
                 }
@@ -112,7 +108,6 @@ public class Worker {
                 String result = resultAsString(localClientId, tweet, sentiment, entities);
                 sqs.sendMessage(resultsURL, result);
                 String messageReceiptHandle = message.getReceiptHandle();
-//                    sqs.changeMessageVisibility(jobsURL, messageReceiptHandle, 0);
                 sqs.deleteMessage(new DeleteMessageRequest(jobsURL, messageReceiptHandle));
             }
         }
