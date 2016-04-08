@@ -52,6 +52,11 @@ public class Worker {
     private static AmazonSQS sqs;
     private static String id;
 
+    /**
+     * Main method.
+     * @param args command line arguments - completely discarded
+     * @throws IOException
+     */
     public static void main(String[] args) throws IOException {
 
         init();
@@ -113,10 +118,18 @@ public class Worker {
         }
     }
 
+    /**
+     * Generate a result message for a link that caused an error while downloading.
+     * @param localClientId the local client's UUID
+     * @return returns the dropped link result message, to be sent in the RESULTS queue
+     */
     private static String droppedLinkMessage(String localClientId) {
         return "<dropped-link><local-id>" + localClientId + "</local-id><worker-id>" + id + "</worker-id></dropped-link>";
     }
 
+    /**
+     * Initializes the Worker instance.
+     */
     private static void init() {
         // initialize local fields
         sentimentProps = new Properties();
@@ -139,6 +152,11 @@ public class Worker {
         System.out.println("Worker running...");
     }
 
+    /**
+     * Stanford CoreNLP method to determine the tweet's sentiment
+     * @param tweet the tweet's content
+     * @return returns the sentiment as an integer from 0 to 4, 0 being `very negative` and 4 being `very positive`
+     */
     private static int findSentiment(String tweet) {
         int mainSentiment = 0;
         if (tweet != null && tweet.length() > 0) {
@@ -160,6 +178,11 @@ public class Worker {
         return mainSentiment;
     }
 
+    /**
+     * Stanford CoreNLP method to extract entities from a tweet.
+     * @param tweet the tweet's content
+     * @return returns a comma-separated list of entities in the tweet
+     */
     private static String extractEntities(String tweet){
         // create an empty Annotation just with the given text
         Annotation document = new Annotation(tweet);
@@ -194,6 +217,14 @@ public class Worker {
         return sb.toString();
     }
 
+    /**
+     * Generate a result message.
+     * @param localClientId the local client's UUID
+     * @param tweet the tweet's content
+     * @param sentiment the tweet's sentiment, an integer from 0 to 4
+     * @param entities a comma-separated list of entities in the tweet
+     * @return returns the result message of a successful processing of a tweet.
+     */
     private static String resultAsString(String localClientId, String tweet, int sentiment, String entities) {
         StringBuilder sb = new StringBuilder();
         sb.append("<id>");

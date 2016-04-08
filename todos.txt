@@ -1,5 +1,0 @@
-- entity linking to wikipedia
-- links in out.html
-- README.md
-- README for majeed
-- delete all comments and TODO in code

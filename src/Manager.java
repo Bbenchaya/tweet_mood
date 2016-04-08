@@ -54,6 +54,12 @@ public class Manager {
         return shouldTerminate.get();
     }
 
+    /**
+     * Main method
+     * @param args command line arguments - completely discarded
+     * @throws IOException
+     * @throws InterruptedException
+     */
     public static void main(String[] args) throws IOException, InterruptedException {
 
         init();
@@ -302,6 +308,10 @@ public class Manager {
 
     }
 
+    /**
+     * Compiles the statistics file for all Worker instances, and uploads it to S3.
+     * @throws IOException
+     */
     private static void compileWorkerStatistics() throws IOException {
         System.out.print("Compiling worker statistics... ");
         File statsFile = new File(WORKER_STATS_FILENAME);
@@ -324,6 +334,9 @@ public class Manager {
         System.out.println("Finished uploading worker statistics file to S3.");
     }
 
+    /**
+     * Initializes this instance.
+     */
     private static void init() {
         workerStatistics = new HashMap<>();
         requests = new ConcurrentHashMap<>();
@@ -356,6 +369,10 @@ public class Manager {
         System.out.println("Manager running...");
     }
 
+    /**
+     *
+     * @return returns true if should continue to process incoming requests in the UPSTREAM queue.
+     */
     private static boolean shouldProcessRequests() {
         return shouldProcessRequests.get();
     }
@@ -378,10 +395,12 @@ public class Manager {
         sqs.sendMessage(downstreamURL, key + "done");
     }
 
+    /**
+     * Creates a new EC2 instance for a Worker.
+     */
     private static void createWorker() {
         // start a Worker instance
         try {
-//            RunInstancesRequest request = new RunInstancesRequest("ami-08111162", 1, 1); // base AMI: b66ed3de
             RunInstancesRequest request = new RunInstancesRequest("ami-37d0c45d", 1, 1);
             request.setInstanceType(InstanceType.T2Micro.toString());
             request.setUserData(getUserDataScript());
@@ -431,6 +450,10 @@ public class Manager {
         }
     }
 
+    /**
+     * A generator for user data to be attached to the EC2 instance reservation.
+     * @return the user data, encoded in base-64.
+     */
     private static String getUserDataScript(){
         StringBuilder sb = new StringBuilder();
         sb.append("#! /bin/bash\n");

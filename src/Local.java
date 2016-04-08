@@ -1,5 +1,8 @@
 /**
  * Created by asafchelouche on 25/3/16.
+ *
+ * The local client.
+ *
  */
 
 import com.amazonaws.AmazonClientException;
@@ -46,7 +49,11 @@ public class Local {
     private static AmazonSQS sqs;
     private static AmazonEC2 ec2;
 
-
+    /**
+     * Main method.
+     * @param args command line arguments - required structure is described in README.md
+     * @throws IOException
+     */
     public static void main(String[] args) throws IOException {
         if (args.length < 3 || args.length > 4) {
             System.out.println("Usage: java -jar <yourjar.jar> <inputFileName.txt> <outputFileName.html> <workersToFileRatio> <terminate>");
@@ -168,7 +175,6 @@ public class Local {
                 IamInstanceProfileSpecification iamInstanceProfileSpecification = new IamInstanceProfileSpecification();
                 iamInstanceProfileSpecification.setName("creds");
                 request.setIamInstanceProfile(iamInstanceProfileSpecification);
-                request.setKeyName("AWS");
                 List<Instance> instances = ec2.runInstances(request).getReservation().getInstances();
                 System.out.println("Launch instances: " + instances);
                 CreateTagsRequest createTagRequest = new CreateTagsRequest();
@@ -196,10 +202,18 @@ public class Local {
         compileResultsToHTML();
     }
 
+    /**
+     * Alert the Manager instance of a new request in the UPSTREAM queue.
+     */
     private static void sendRequestInUpstream() {
         sqs.sendMessage(upstreamURL, id + LINKS_FILENAME_SUFFIX);
     }
 
+    /**
+     * Awaits for the results message to appear in the DOWNSTREAM queue, downloads the results file from S3 and compiles
+     * it to an HTML file, whose name is as supplied in the command line during execution.
+     * @throws IOException
+     */
     private static void compileResultsToHTML() throws IOException {
         // await for the results file, and compile it to HTML
         GetQueueAttributesRequest getQueueAttributesRequest = new GetQueueAttributesRequest(downstreamURL);
@@ -290,6 +304,10 @@ public class Local {
         System.out.println("Finished execution, exiting...");
     }
 
+    /**
+     * A generator for user data to be attached to the EC2 instance reservation.
+     * @return the user data, encoded in base-64.
+     */
     private static String getUserDataScript(){
         StringBuilder sb = new StringBuilder();
         sb.append("#! /bin/bash\n");
