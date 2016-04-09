@@ -1,0 +1,13 @@
+Manifest-Version: 1.0
+Class-Path: jollyday-0.4.7.jar stanford-corenlp-3.3.0.jar jsoup-1.8.3.
+ jar ejml-0.23.jar aspectjweaver.jar httpcore-4.3.3.jar aspectjrt-1.8.
+ 2.jar joda-time-2.8.1.jar freemarker-2.3.9.jar httpclient-4.3.6.jar c
+ ommons-codec-1.6.jar jackson-core-2.5.3.jar javax.mail-api-1.4.6.jar 
+ commons-logging-1.1.3.jar jackson-databind-2.5.3.jar jackson-annotati
+ ons-2.5.0.jar spring-core-3.0.7.RELEASE.jar spring-test-3.0.7.RELEASE
+ .jar spring-beans-3.0.7.RELEASE.jar spring-context-3.0.7.RELEASE.jar 
+ aws-java-sdk-1.10.64.jar aws-java-sdk-1.10.64-javadoc.jar aws-java-sd
+ k-1.10.64-sources.jar aws-java-sdk-flow-build-tools.jar-1.10.64.jar s
+ tanford-corenlp-3.3.0-models.jar
+Main-Class: Worker
+

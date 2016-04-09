@@ -177,10 +177,10 @@ public class Manager {
                         pool.submit(getAndParseTweetLinksFile);
                     }
                     else {  // termination message received in UPSTREAM queue
-                        shouldProcessRequests.set(false);
-                        sqs.sendMessage(jobsURL, "terminate");
                         System.out.println("Termination message received from Local id: " + id);
                         System.out.println("Incoming requests will be ignored from now, Manager is still waiting for results for previous requests.");
+                        shouldProcessRequests.set(false);
+                        sqs.sendMessage(jobsURL, "terminate");
                     }
                 }
             }
@@ -200,7 +200,6 @@ public class Manager {
                             System.out.println("Compiling results for Local id: " + keyValue.getKey());
                             Manager.compileAndSendResults(keyValue.getKey(), keyValue.getValue().getResults());
                             requests.remove(keyValue.getKey());
-                            System.out.println("Finished compiling results for Local id: " + keyValue.getKey());
                         }
                     }
                     try {
@@ -269,7 +268,6 @@ public class Manager {
                 String workerId = body.substring(body.indexOf("<worker-id>") + 11, body.indexOf("</worker-id>"));
                 workerStatistics.putIfAbsent(workerId, new WorkerStatistics());
                 if (body.contains("<dropped-link>")) {
-                    System.out.println("dropped link");
                     String requestId = body.substring(body.indexOf("<local-id>") + 10, body.indexOf("</local-id>"));
                     requests.get(requestId).decrementExpectedResults();
                     String messageReceiptHandle = message.getReceiptHandle();
@@ -304,7 +302,7 @@ public class Manager {
         pool.shutdownNow();
         System.out.println("Manager has finished execution, exiting...");
         Runtime rt = Runtime.getRuntime();
-        Process pr = rt.exec("shutdown -h now"); // sends a kill message to the EC2 instance
+        Process pr = rt.exec("shutdown -h +1"); // sends a kill message to the EC2 instance
 
     }
 

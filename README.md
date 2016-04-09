@@ -44,9 +44,11 @@ Note: all EC2 instances are bootstrapped using a shell script (`user data` start
 
     `java <input filename> <HTML output filename> <n> [terminate]`
     
-    where - 
-        `n` - the number of tweets per Worker. This is used in `Manager` to determine how many EC2 instances should be raised as `Worker`s
-        `[terminate]` - if this local client should send a termination message to the `Manager`, once the results file has been downloaded.
+    where:
+    
+    `n` - the number of tweets per Worker. This is used in `Manager` to determine how many EC2 instances should be raised as `Worker`s.
+        
+    `[terminate]` - if this local client should send a termination message to the `Manager`, once the results file has been downloaded.
 
 
 ## License
