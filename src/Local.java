@@ -26,8 +26,6 @@ import org.apache.commons.codec.binary.Base64;
 
 import java.io.*;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import static java.lang.Thread.sleep;
 import static javafx.application.Platform.exit;
@@ -50,7 +48,8 @@ public class Local {
                 "\n\t</head>" +
                 "\n\t<body>" +
                     "\n\t\t<div class=\"document\">" +
-                    "\n\t\t<div><h1 align=\"center\">DSP 161, Assignment 1</h1></div>";
+                    "\n\t\t<div><h1 align=\"center\">DSP 161, Assignment 1</h1></div>" +
+                    "\n\t\t<div align=\"center\"><img src=\"rubyrhod.jpeg\" /></div>";
     private static final String FOOTER =
                 "\n\t</body>\n" +
                 "</html>";
@@ -80,138 +79,138 @@ public class Local {
         System.out.println("Local instance id: " + id);
         objectName = id + LINKS_FILENAME_SUFFIX;
 
-        //upload the tweet links list to S3
-        s3 = new AmazonS3Client();
-        Region usEast1 = Region.getRegion(Regions.US_EAST_1);
-        s3.setRegion(usEast1);
-        System.out.println("Local client running...");
-        try {
-            System.out.print("Uploading the tweet links file to S3... ");
-            File file = new File(System.getProperty("user.dir") + "/" + inputFileName);
-            s3.putObject(new PutObjectRequest(BUCKET_NAME, objectName, file));
-            System.out.println("Done.");
-        } catch (AmazonServiceException ase) {
-            System.out.println("Caught an AmazonServiceException, which means your request made it "
-                    + "to Amazon S3, but was rejected with an error response for some reason.");
-            System.out.println("Error Message:    " + ase.getMessage());
-            System.out.println("HTTP Status Code: " + ase.getStatusCode());
-            System.out.println("AWS Error Code:   " + ase.getErrorCode());
-            System.out.println("Error Type:       " + ase.getErrorType());
-            System.out.println("Request ID:       " + ase.getRequestId());
-        } catch (AmazonClientException ace) {
-            System.out.println("Caught an AmazonClientException, which means the client encountered "
-                    + "a serious internal problem while trying to communicate with S3, "
-                    + "such as not being able to access the network.");
-            System.out.println("Error Message: " + ace.getMessage());
-        }
-
-        //check for a running Manager instance on EC2, if not initialize one
-        AWSCredentials credentials = null;
-        try {
-            credentials = new ProfileCredentialsProvider().getCredentials();
-        } catch (Exception e) {
-            throw new AmazonClientException(
-                    "Cannot load the credentials from the credential profiles file. " +
-                            "Please make sure that your credentials file is at the correct " +
-                            "location (~/.aws/credentials), and is in valid format.",
-                    e);
-        }
-        ec2 = new AmazonEC2Client(credentials);
-        ec2.setRegion(usEast1);
-        sqs = new AmazonSQSClient(credentials);
-        sqs.setRegion(usEast1);
-        List<String> tagValues = new ArrayList<>();
-        tagValues.add("manager");
-        Filter tagFilter = new Filter("tag:kind", tagValues);
-        List<String> statusValues = new ArrayList<>();
-        statusValues.add("running");
-        Filter statusFilter = new Filter("instance-state-name", statusValues);
-        DescribeInstancesResult filteredInstances = ec2.describeInstances(new DescribeInstancesRequest().withFilters(tagFilter, statusFilter));
-        List<Reservation> reservations = filteredInstances.getReservations();
-        if (reservations.size() > 0) { // a Manager instance is already running
-            // get the URLs file from S3
-            System.out.print("Manager instance already running, downloading UPSTREAM\\DOWNSTREAM queues' URLs file from S3... ");
-            S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, URLS_FILENAME));
-            System.out.println("Done.");
-            BufferedReader br = new BufferedReader(new InputStreamReader(object.getObjectContent()));
-            upstreamURL = br.readLine();
-            downstreamURL = br.readLine();
-            br.close();
-            sendRequestInUpstream();
-        }
-        else { // create the SQSs and start a manager instance
-
-            System.out.println("No Manager instance currently running.");
-            // start 2 SQSs: upstream, downstream
-            try {
-                // Create the upstream and downstream queues
-                System.out.print("Creating upstream queue... ");
-                CreateQueueRequest createUpstreamQueueRequest = new CreateQueueRequest("upstream");
-                upstreamURL = sqs.createQueue(createUpstreamQueueRequest).getQueueUrl();
-                System.out.println("Done.");
-                System.out.print("Creating downstream queue... ");
-                CreateQueueRequest createDownstreamQueueRequest = new CreateQueueRequest("downstream");
-                downstreamURL = sqs.createQueue(createDownstreamQueueRequest).getQueueUrl();
-                System.out.println("Done.");
-
-                // create a file that holds the queues' URLs, and upload it to S3 for the manager
-                File file = new File(System.getProperty("user.dir") + "/" + URLS_FILENAME);
-                FileWriter fw = new FileWriter(file);
-                fw.write(upstreamURL + "\n");
-                fw.write(downstreamURL + "\n");
-                fw.write(Integer.toString(workersToFileRatio) + "\n");
-                fw.close();
-                System.out.print("Uploading the UPSTREAM\\DOWNSTREAM queues' URLs file to S3... ");
-                s3.putObject(new PutObjectRequest(BUCKET_NAME, URLS_FILENAME, file));
-                System.out.println("Done.");
-            } catch (AmazonServiceException ase) {
-                System.out.println("Caught an AmazonServiceException, which means your request made it " +
-                        "to Amazon SQS, but was rejected with an error response for some reason.");
-                System.out.println("Error Message:    " + ase.getMessage());
-                System.out.println("HTTP Status Code: " + ase.getStatusCode());
-                System.out.println("AWS Error Code:   " + ase.getErrorCode());
-                System.out.println("Error Type:       " + ase.getErrorType());
-                System.out.println("Request ID:       " + ase.getRequestId());
-            } catch (AmazonClientException ace) {
-                System.out.println("Caught an AmazonClientException, which means the client encountered " +
-                        "a serious internal problem while trying to communicate with SQS, such as not " +
-                        "being able to access the network.");
-                System.out.println("Error Message: " + ace.getMessage());
-            }
-
-            // start a Manager instance
-            try {
-                System.out.println("Firing up new Manager instance...");
-                RunInstancesRequest request = new RunInstancesRequest("ami-37d0c45d", 1, 1); // upgraded ami: yum updated, java 8
-                request.setInstanceType(InstanceType.T2Micro.toString());
-                request.setUserData(getUserDataScript());
-                IamInstanceProfileSpecification iamInstanceProfileSpecification = new IamInstanceProfileSpecification();
-                iamInstanceProfileSpecification.setName("creds");
-                request.setIamInstanceProfile(iamInstanceProfileSpecification);
-                List<Instance> instances = ec2.runInstances(request).getReservation().getInstances();
-                System.out.println("Launch instances: " + instances);
-                CreateTagsRequest createTagRequest = new CreateTagsRequest();
-                createTagRequest.withResources(instances.get(0).getInstanceId()).withTags(new Tag("kind", "manager"));
-                ec2.createTags(createTagRequest);
-                sendRequestInUpstream();
-            } catch (AmazonServiceException ase) {
-                System.out.println("Caught Exception: " + ase.getMessage());
-                System.out.println("Response Status Code: " + ase.getStatusCode());
-                System.out.println("Error Code: " + ase.getErrorCode());
-                System.out.println("Request ID: " + ase.getRequestId());
-            }
-        }
-
-        // wait for the manager to run
-        DescribeInstancesRequest describeInstancesRequest = new DescribeInstancesRequest().withFilters(tagFilter, statusFilter);
-        while (ec2.describeInstances(describeInstancesRequest).getReservations().isEmpty()) {
-            try {
-                sleep(1000);
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-        }
-        System.out.println("Manager instance running.");
+//        //upload the tweet links list to S3
+//        s3 = new AmazonS3Client();
+//        Region usEast1 = Region.getRegion(Regions.US_EAST_1);
+//        s3.setRegion(usEast1);
+//        System.out.println("Local client running...");
+//        try {
+//            System.out.print("Uploading the tweet links file to S3... ");
+//            File file = new File(System.getProperty("user.dir") + "/" + inputFileName);
+//            s3.putObject(new PutObjectRequest(BUCKET_NAME, objectName, file));
+//            System.out.println("Done.");
+//        } catch (AmazonServiceException ase) {
+//            System.out.println("Caught an AmazonServiceException, which means your request made it "
+//                    + "to Amazon S3, but was rejected with an error response for some reason.");
+//            System.out.println("Error Message:    " + ase.getMessage());
+//            System.out.println("HTTP Status Code: " + ase.getStatusCode());
+//            System.out.println("AWS Error Code:   " + ase.getErrorCode());
+//            System.out.println("Error Type:       " + ase.getErrorType());
+//            System.out.println("Request ID:       " + ase.getRequestId());
+//        } catch (AmazonClientException ace) {
+//            System.out.println("Caught an AmazonClientException, which means the client encountered "
+//                    + "a serious internal problem while trying to communicate with S3, "
+//                    + "such as not being able to access the network.");
+//            System.out.println("Error Message: " + ace.getMessage());
+//        }
+//
+//        //check for a running Manager instance on EC2, if not initialize one
+//        AWSCredentials credentials = null;
+//        try {
+//            credentials = new ProfileCredentialsProvider().getCredentials();
+//        } catch (Exception e) {
+//            throw new AmazonClientException(
+//                    "Cannot load the credentials from the credential profiles file. " +
+//                            "Please make sure that your credentials file is at the correct " +
+//                            "location (~/.aws/credentials), and is in valid format.",
+//                    e);
+//        }
+//        ec2 = new AmazonEC2Client(credentials);
+//        ec2.setRegion(usEast1);
+//        sqs = new AmazonSQSClient(credentials);
+//        sqs.setRegion(usEast1);
+//        List<String> tagValues = new ArrayList<>();
+//        tagValues.add("manager");
+//        Filter tagFilter = new Filter("tag:kind", tagValues);
+//        List<String> statusValues = new ArrayList<>();
+//        statusValues.add("running");
+//        Filter statusFilter = new Filter("instance-state-name", statusValues);
+//        DescribeInstancesResult filteredInstances = ec2.describeInstances(new DescribeInstancesRequest().withFilters(tagFilter, statusFilter));
+//        List<Reservation> reservations = filteredInstances.getReservations();
+//        if (reservations.size() > 0) { // a Manager instance is already running
+//            // get the URLs file from S3
+//            System.out.print("Manager instance already running, downloading UPSTREAM\\DOWNSTREAM queues' URLs file from S3... ");
+//            S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, URLS_FILENAME));
+//            System.out.println("Done.");
+//            BufferedReader br = new BufferedReader(new InputStreamReader(object.getObjectContent()));
+//            upstreamURL = br.readLine();
+//            downstreamURL = br.readLine();
+//            br.close();
+//            sendRequestInUpstream();
+//        }
+//        else { // create the SQSs and start a manager instance
+//
+//            System.out.println("No Manager instance currently running.");
+//            // start 2 SQSs: upstream, downstream
+//            try {
+//                // Create the upstream and downstream queues
+//                System.out.print("Creating upstream queue... ");
+//                CreateQueueRequest createUpstreamQueueRequest = new CreateQueueRequest("upstream");
+//                upstreamURL = sqs.createQueue(createUpstreamQueueRequest).getQueueUrl();
+//                System.out.println("Done.");
+//                System.out.print("Creating downstream queue... ");
+//                CreateQueueRequest createDownstreamQueueRequest = new CreateQueueRequest("downstream");
+//                downstreamURL = sqs.createQueue(createDownstreamQueueRequest).getQueueUrl();
+//                System.out.println("Done.");
+//
+//                // create a file that holds the queues' URLs, and upload it to S3 for the manager
+//                File file = new File(System.getProperty("user.dir") + "/" + URLS_FILENAME);
+//                FileWriter fw = new FileWriter(file);
+//                fw.write(upstreamURL + "\n");
+//                fw.write(downstreamURL + "\n");
+//                fw.write(Integer.toString(workersToFileRatio) + "\n");
+//                fw.close();
+//                System.out.print("Uploading the UPSTREAM\\DOWNSTREAM queues' URLs file to S3... ");
+//                s3.putObject(new PutObjectRequest(BUCKET_NAME, URLS_FILENAME, file));
+//                System.out.println("Done.");
+//            } catch (AmazonServiceException ase) {
+//                System.out.println("Caught an AmazonServiceException, which means your request made it " +
+//                        "to Amazon SQS, but was rejected with an error response for some reason.");
+//                System.out.println("Error Message:    " + ase.getMessage());
+//                System.out.println("HTTP Status Code: " + ase.getStatusCode());
+//                System.out.println("AWS Error Code:   " + ase.getErrorCode());
+//                System.out.println("Error Type:       " + ase.getErrorType());
+//                System.out.println("Request ID:       " + ase.getRequestId());
+//            } catch (AmazonClientException ace) {
+//                System.out.println("Caught an AmazonClientException, which means the client encountered " +
+//                        "a serious internal problem while trying to communicate with SQS, such as not " +
+//                        "being able to access the network.");
+//                System.out.println("Error Message: " + ace.getMessage());
+//            }
+//
+//            // start a Manager instance
+//            try {
+//                System.out.println("Firing up new Manager instance...");
+//                RunInstancesRequest request = new RunInstancesRequest("ami-37d0c45d", 1, 1); // upgraded ami: yum updated, java 8
+//                request.setInstanceType(InstanceType.T2Micro.toString());
+//                request.setUserData(getUserDataScript());
+//                IamInstanceProfileSpecification iamInstanceProfileSpecification = new IamInstanceProfileSpecification();
+//                iamInstanceProfileSpecification.setName("creds");
+//                request.setIamInstanceProfile(iamInstanceProfileSpecification);
+//                List<Instance> instances = ec2.runInstances(request).getReservation().getInstances();
+//                System.out.println("Launch instances: " + instances);
+//                CreateTagsRequest createTagRequest = new CreateTagsRequest();
+//                createTagRequest.withResources(instances.get(0).getInstanceId()).withTags(new Tag("kind", "manager"));
+//                ec2.createTags(createTagRequest);
+//                sendRequestInUpstream();
+//            } catch (AmazonServiceException ase) {
+//                System.out.println("Caught Exception: " + ase.getMessage());
+//                System.out.println("Response Status Code: " + ase.getStatusCode());
+//                System.out.println("Error Code: " + ase.getErrorCode());
+//                System.out.println("Request ID: " + ase.getRequestId());
+//            }
+//        }
+//
+//        // wait for the manager to run
+//        DescribeInstancesRequest describeInstancesRequest = new DescribeInstancesRequest().withFilters(tagFilter, statusFilter);
+//        while (ec2.describeInstances(describeInstancesRequest).getReservations().isEmpty()) {
+//            try {
+//                sleep(1000);
+//            } catch (InterruptedException e) {
+//                e.printStackTrace();
+//            }
+//        }
+//        System.out.println("Manager instance running.");
         compileResultsToHTML();
     }
 
@@ -228,42 +227,42 @@ public class Local {
      * @throws IOException
      */
     private static void compileResultsToHTML() throws IOException {
-        // await for the results file, and compile it to HTML
-        GetQueueAttributesRequest getQueueAttributesRequest = new GetQueueAttributesRequest(downstreamURL);
-        List<String> attributeNames = new LinkedList<>();
-        attributeNames.add("ApproximateNumberOfMessages");
-        getQueueAttributesRequest.setAttributeNames(attributeNames);
-        ReceiveMessageResult receiveMessageResult;
-        System.out.println("Awaiting results...");
-        while (true) {
-            while ((receiveMessageResult = sqs.receiveMessage(downstreamURL)).getMessages().isEmpty()) {
-                try {
-                    sleep(1000);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-            if (receiveMessageResult.toString().contains("done")) {
-                List<Message> messages = receiveMessageResult.getMessages();
-                for (Message message : messages) {
-                    if (message.getBody().contains("done")) {
-                        String messageReceiptHandle = message.getReceiptHandle();
-                        sqs.changeMessageVisibility(downstreamURL, messageReceiptHandle, 0);
-                        sqs.deleteMessage(new DeleteMessageRequest(downstreamURL, messageReceiptHandle));
-                        break;
-                    }
-                }
-                break;
-            }
-        }
-        System.out.print("Downloading results file from S3... ");
-        S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, id + RESULTS_FILENAME_SUFFIX));
-        System.out.println("Done.");
+//        // await for the results file, and compile it to HTML
+//        GetQueueAttributesRequest getQueueAttributesRequest = new GetQueueAttributesRequest(downstreamURL);
+//        List<String> attributeNames = new LinkedList<>();
+//        attributeNames.add("ApproximateNumberOfMessages");
+//        getQueueAttributesRequest.setAttributeNames(attributeNames);
+//        ReceiveMessageResult receiveMessageResult;
+//        System.out.println("Awaiting results...");
+//        while (true) {
+//            while ((receiveMessageResult = sqs.receiveMessage(downstreamURL)).getMessages().isEmpty()) {
+//                try {
+//                    sleep(1000);
+//                } catch (InterruptedException e) {
+//                    e.printStackTrace();
+//                }
+//            }
+//            if (receiveMessageResult.toString().contains("done")) {
+//                List<Message> messages = receiveMessageResult.getMessages();
+//                for (Message message : messages) {
+//                    if (message.getBody().contains("done")) {
+//                        String messageReceiptHandle = message.getReceiptHandle();
+//                        sqs.changeMessageVisibility(downstreamURL, messageReceiptHandle, 0);
+//                        sqs.deleteMessage(new DeleteMessageRequest(downstreamURL, messageReceiptHandle));
+//                        break;
+//                    }
+//                }
+//                break;
+//            }
+//        }
+//        System.out.print("Downloading results file from S3... ");
+//        S3Object object = s3.getObject(new GetObjectRequest(BUCKET_NAME, id + RESULTS_FILENAME_SUFFIX));
+//        System.out.println("Done.");
         File output = new File(System.getProperty("user.dir") + "/" + outputFileName);
         FileWriter fw = new FileWriter(output);
         fw.write(HEADER);
-        Scanner scanner = new Scanner(new InputStreamReader(object.getObjectContent()));
-//        Scanner scanner = new Scanner(new File("results.txt"));
+//        Scanner scanner = new Scanner(new InputStreamReader(object.getObjectContent()));
+        Scanner scanner = new Scanner(new File("results.txt"));
         scanner.useDelimiter("<delimiter>");
         int[] sentimentCounters = new int[5];
         //tokenize the reservations file and process each token one at a time
@@ -306,7 +305,7 @@ public class Local {
             }
             fw.write("\n\t\t");
             fw.write("<div class=\"" + cssColorClass + "\"><p><b>");
-            fw.write(generateLinks(tweet));
+            fw.write(generateHashtags(generateHandles(generateLinks(tweet))));
             fw.write("</b><br>");
             fw.write(entities);
             fw.write("</p></div>");
@@ -316,11 +315,43 @@ public class Local {
         fw.flush();
         fw.close();
         scanner.close();
-        if (managerShouldTerminate) {
-            sqs.sendMessage(upstreamURL, "terminate");
-            System.out.println("Sent termination message to the Manager.");
-        }
+//        if (managerShouldTerminate) {
+//            sqs.sendMessage(upstreamURL, "terminate");
+//            System.out.println("Sent termination message to the Manager.");
+//        }
         System.out.println("Finished execution, exiting...");
+    }
+
+    private static String generateHashtags(String tweet) {
+        String prefix = "<a href=\"http://twitter.com/hashtag/";
+        String prefix2 = "?src=hash\">";
+        String suffix = "</a>";
+        List<String> hashtags = new LinkedList<>();
+        int end = 0;
+        int start;
+        while ((start = tweet.indexOf("#", end)) != -1) {
+            end = linkEnd(tweet, start);
+            hashtags.add(tweet.substring(start, end));
+        }
+        for (String hashtag : hashtags)
+            tweet = tweet.replace(hashtag, prefix + hashtag.substring(1, hashtag.length()) + prefix2 + hashtag + suffix);
+        return tweet;
+    }
+
+    private static String generateHandles(String tweet) {
+        String prefix = "<a href=\"http://twitter.com/";
+        String prefix2 = "\">";
+        String suffix = "</a>";
+        List<String> handles = new LinkedList<>();
+        int end = 0;
+        int start;
+        while ((start = tweet.indexOf("@", end)) != -1) {
+            end = linkEnd(tweet, start);
+            handles.add(tweet.substring(start, end));
+        }
+        for (String handle : handles)
+            tweet = tweet.replace(handle, prefix + handle.substring(1, handle.length()) + prefix2 + handle + suffix);
+        return tweet;
     }
 
     private static int linkEnd(String tweet, int from) {
