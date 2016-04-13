@@ -26,6 +26,8 @@ import org.apache.commons.codec.binary.Base64;
 
 import java.io.*;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static java.lang.Thread.sleep;
 import static javafx.application.Platform.exit;
@@ -39,8 +41,19 @@ public class Local {
     private static String objectName;
     private static String id;
     private static final String LINKS_FILENAME_SUFFIX = "links.txt";
-    private static final String HEADER = "<html>\n\t<head>\n\t\t<title>DSP 162, assignment 1</title>\n\t</head>\n\t<body>";
-    private static final String FOOTER = "\n\t</body>\n</html>";
+    private static final String HEADER =
+            "<!DOCTYPE html>" +
+            "\n\t<html>" +
+                "\n\t<head>" +
+                    "\n\t\t<title>DSP 162, assignment 1</title>" +
+                    "\n\t\t<link type=\"text/css\" rel=\"stylesheet\" href=\"stylesheet.css\"/>" +
+                "\n\t</head>" +
+                "\n\t<body>" +
+                    "\n\t\t<div class=\"document\">" +
+                    "\n\t\t<div><h1 align=\"center\">DSP 161, Assignment 1</h1></div>";
+    private static final String FOOTER =
+                "\n\t</body>\n" +
+                "</html>";
     private static boolean managerShouldTerminate;
     private static String upstreamURL;
     private static String downstreamURL;
@@ -250,8 +263,9 @@ public class Local {
         FileWriter fw = new FileWriter(output);
         fw.write(HEADER);
         Scanner scanner = new Scanner(new InputStreamReader(object.getObjectContent()));
+//        Scanner scanner = new Scanner(new File("results.txt"));
         scanner.useDelimiter("<delimiter>");
-
+        int[] sentimentCounters = new int[5];
         //tokenize the reservations file and process each token one at a time
         System.out.println("Compiling the results to HTML. Output path: " + System.getProperty("user.dir") + "/" + outputFileName);
         while (scanner.hasNext()) {
@@ -267,30 +281,35 @@ public class Local {
             }
             String sentiment = result.substring(result.indexOf("<sentiment>") + 11, result.indexOf("</sentiment>"));
             String entities = result.substring(result.indexOf("<entities>") + 10, result.indexOf("</entities>"));
-            String fontColor = null;
+            String cssColorClass = null;
             switch(sentiment) {
                 case "0":
-                    fontColor = "#610B0B"; //dark red
+                    cssColorClass = "s0"; //dark red
+                    sentimentCounters[0]++;
                     break;
                 case "1":
-                    fontColor = "red";
+                    cssColorClass = "s1";
+                    sentimentCounters[1]++;
                     break;
                 case "2":
-                    fontColor = "black";
+                    cssColorClass = "s2";
+                    sentimentCounters[2]++;
                     break;
                 case "3":
-                    fontColor = "#40FF00"; //light green
+                    cssColorClass = "s3";
+                    sentimentCounters[3]++;
                     break;
                 case "4":
-                    fontColor = "#0B3B0B"; //dark green
+                    cssColorClass = "s4";
+                    sentimentCounters[4]++;
                     break;
             }
-            fw.write("\n\t\t<p>");
-            fw.write("<b><font color=\"" + fontColor + "\">");
-            fw.write(tweet);
-            fw.write("</font></b>");
+            fw.write("\n\t\t");
+            fw.write("<div class=\"" + cssColorClass + "\"><p><b>");
+            fw.write(generateLinks(tweet));
+            fw.write("</b><br>");
             fw.write(entities);
-            fw.write("</p>");
+            fw.write("</p></div>");
             fw.flush();
         }
         fw.write(FOOTER);
@@ -302,6 +321,35 @@ public class Local {
             System.out.println("Sent termination message to the Manager.");
         }
         System.out.println("Finished execution, exiting...");
+    }
+
+    private static int linkEnd(String tweet, int from) {
+        int length = tweet.length();
+        while (from < length) {
+            switch (tweet.charAt(from)) {
+                case ' ':
+                case '\"':
+                    return from;
+            }
+            from++;
+        }
+        return tweet.length();
+    }
+
+    private static String generateLinks(String tweet) {
+        String prefix = "<a href=\"";
+        String prefix2 = "\">";
+        String suffix = "</a>";
+        List<String> links = new LinkedList<>();
+        int end = 0;
+        int start;
+        while ((start = tweet.indexOf("http", end)) != -1) {
+            end = linkEnd(tweet, start);
+            links.add(tweet.substring(start, end));
+        }
+        for (String link : links)
+            tweet = tweet.replace(link, prefix + link + prefix2 + link + suffix);
+        return tweet;
     }
 
     /**

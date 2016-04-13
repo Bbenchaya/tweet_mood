@@ -1,0 +1,44 @@
+p {
+    font-family: "Calibri", "Helvetica Neue", Arial, sans-serif;
+    font-size: 1.1em;
+    line-height: 1.7em;
+}
+
+h1 {
+    alignment: center;
+    font-family: "Calibri", "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.7em;
+}
+
+a {
+    color: white;
+}
+
+.document {
+    background-color: lightgray;
+}
+
+.s0 {
+    color: blanchedalmond;
+    background: -webkit-linear-gradient(left, darkred, #bf0000);
+}
+
+.s1 {
+    color: blanchedalmond;
+    background: -webkit-linear-gradient(left, red, #ff4d4d);
+}
+
+.s2 {
+    color: blanchedalmond;
+    background: -webkit-linear-gradient(left, black, #4d4d4d);
+}
+
+.s3 {
+    color: black;
+    background: -webkit-linear-gradient(left, lightgreen, #bdf5bd);
+}
+
+.s4 {
+    color: blanchedalmond;
+    background: -webkit-linear-gradient(left, darkgreen, #00b300);
+}
