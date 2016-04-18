@@ -19,6 +19,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -49,6 +50,7 @@ public class Manager {
     private static ConcurrentHashMap<String, RequestStatus> requests;
     private static HashMap<String, WorkerStatistics> workerStatistics;
     private static ExecutorService pool;
+    private static Semaphore currentlyHandledRequestes;
 
     private static boolean shouldTerminate() {
         return shouldTerminate.get();
@@ -138,6 +140,11 @@ public class Manager {
                         Thread getAndParseTweetLinksFile = new Thread() {
                             @Override
                             public void run() {
+                                try {
+                                    currentlyHandledRequestes.acquire();
+                                } catch (InterruptedException e) {
+                                    e.printStackTrace();
+                                }
                                 System.out.println("Handling request for Local id: " + finalId);
                                 // count the number of links in the file in order to determinte the number of new workers that need to be raised
                                 List<String> links = new LinkedList<>();
@@ -200,6 +207,7 @@ public class Manager {
                             System.out.println("Compiling results for Local id: " + keyValue.getKey());
                             Manager.compileAndSendResults(keyValue.getKey(), keyValue.getValue().getResults());
                             requests.remove(keyValue.getKey());
+                            currentlyHandledRequestes.release();
                         }
                     }
                     try {
@@ -350,6 +358,7 @@ public class Manager {
         firstWorkerRunning = new AtomicBoolean();
         firstWorkerRunning.set(false);
         pool = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
+        currentlyHandledRequestes = new Semaphore(3 * THREAD_POOL_SIZE);
 
         // initiate connection to S3
         s3 = new AmazonS3Client();
