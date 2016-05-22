@@ -1,6 +1,6 @@
 # Tweet Mood
 
-Analyze tweets to find their sentiment and extract entities.
+Analyze tweets to find their sentiment and extract named entities.
 
 
 ## App workflow
@@ -50,6 +50,8 @@ Note: all EC2 instances are bootstrapped using a shell script (`user data` start
         
     `[terminate]` - if this local client should send a termination message to the `Manager`, once the results file has been downloaded.
 
+## Output example
+See `output.html`. Green!!!
 
 ## License
 
